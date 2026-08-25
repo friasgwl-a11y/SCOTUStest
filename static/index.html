@@ -23,17 +23,24 @@
 <body>
 <header class="topbar">
   <div class="topbar-inner">
-    <div class="brand">
+    <a href="/" data-link class="brand">
       <span class="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 3v18M5 21h14M5 7l-3 5a4 4 0 0 0 6 0l-3-5zm14 0l-3 5a4 4 0 0 0 6 0l-3-5zM5 7h14M12 3l3 4M12 3L9 7"/>
         </svg>
       </span>
-      <div>
-        <h1>SCOTUS Tracker</h1>
-        <p class="tagline">Opinions &amp; orders of the Supreme Court of the United States</p>
-      </div>
-    </div>
+      <span class="brand-text">
+        <span class="brand-title">SCOTUS Tracker</span>
+        <span class="tagline">Supreme Court of the United States</span>
+      </span>
+    </a>
+
+    <nav class="main-nav" aria-label="Primary">
+      <a href="/" data-link data-nav="home">Home</a>
+      <a href="/opinions" data-link data-nav="opinions">Opinions</a>
+      <a href="/orders" data-link data-nav="orders">Orders</a>
+    </nav>
+
     <div class="topbar-actions">
       <span id="lastRun" class="last-run">&mdash;</span>
       <button id="themeToggle" class="icon-btn theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">
@@ -45,62 +52,9 @@
   </div>
 </header>
 
-<main class="container">
-  <div id="errorBanner" class="error-banner hidden" role="alert"></div>
+<div id="errorBanner" class="error-banner hidden" role="alert"></div>
 
-  <section class="stats-grid" id="statsGrid" aria-label="Summary statistics">
-    <div class="stat-card">
-      <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6M9 9h1"/></svg></span>
-      <div class="stat-body"><div class="stat-value" id="statOpinions">&ndash;</div><div class="stat-label">Opinions tracked</div></div>
-    </div>
-    <div class="stat-card">
-      <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v3M16 3v3M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01M16 17h.01"/></svg></span>
-      <div class="stat-body"><div class="stat-value" id="statOrders">&ndash;</div><div class="stat-label">Orders tracked</div></div>
-    </div>
-    <div class="stat-card stat-notable">
-      <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></span>
-      <div class="stat-body"><div class="stat-value" id="statNotable">&ndash;</div><div class="stat-label">Notable orders</div></div>
-    </div>
-    <div class="stat-card">
-      <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4M16 2v4M3 9h18"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="m9 16 2 2 4-4"/></svg></span>
-      <div class="stat-body"><div class="stat-value" id="statLatest">&ndash;</div><div class="stat-label">Most recent activity</div></div>
-    </div>
-    <div class="stat-card">
-      <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></span>
-      <div class="stat-body"><div class="stat-value" id="statPending">&ndash;</div><div class="stat-label">Pending summarization</div></div>
-    </div>
-  </section>
-
-  <nav class="tabs" role="tablist">
-    <button class="tab active" data-tab="opinions" role="tab" aria-selected="true">Opinions</button>
-    <button class="tab" data-tab="orders" role="tab" aria-selected="false">Orders</button>
-  </nav>
-
-  <section class="toolbar">
-    <input id="searchInput" type="search" placeholder="Search case name, docket, holding&hellip;" />
-    <select id="termFilter"><option value="">All terms</option></select>
-    <select id="typeFilter" class="hidden-tab-opinions"><option value="">All order types</option><option value="Order List">Order List</option><option value="Miscellaneous Order">Miscellaneous Order</option></select>
-    <select id="justiceFilter" class="hidden-tab-orders"><option value="">All authors</option></select>
-    <label class="notable-toggle hidden-tab-opinions">
-      <input type="checkbox" id="notableOnly" /> Notable only
-    </label>
-  </section>
-
-  <section id="listContainer" class="list" aria-live="polite"></section>
-
-  <div class="pager">
-    <button id="prevPage" class="btn">&larr; Newer</button>
-    <span id="pageInfo"></span>
-    <button id="nextPage" class="btn">Older &rarr;</button>
-  </div>
-</main>
-
-<div id="detailOverlay" class="overlay hidden">
-  <div class="detail-panel">
-    <button id="closeDetail" class="btn-close" aria-label="Close">&times;</button>
-    <div id="detailContent"></div>
-  </div>
-</div>
+<main id="app" class="container"></main>
 
 <footer class="site-footer">
   <p>Data sourced directly from <a href="https://www.supremecourt.gov" target="_blank" rel="noopener">supremecourt.gov</a>. Summaries are generated automatically (extractive by default, or via Claude when configured) and may contain errors &mdash; always verify against the official PDF.</p>

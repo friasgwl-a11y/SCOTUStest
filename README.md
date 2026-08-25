@@ -26,9 +26,24 @@ presents everything in a searchable, filterable web dashboard.
     concurrence, separate statement, or a grant/stay of certiorari.
 - **Stores** everything in SQLite (`app/models.py`), so re-running a fetch
   only downloads/processes documents it hasn't seen before.
-- **Serves** a REST API (`app/api/routes.py`) and a static dashboard
-  (`static/`) for browsing, searching, and filtering opinions and orders,
-  with a "Refresh now" button and an in-process scheduler that re-fetches
+- **Tracks term-level context** (`app/term_scraper.py`, `app/term_ingest.py`):
+  - Which term the Court's own site currently labels the "Current Term"
+    (no date-guessing), plus a granted-case count for it and for next term,
+    parsed from the Court's own **Granted & Noted List** PDF.
+  - **Majority author and a per-Justice concurrence/dissent breakdown**
+    for each opinion, also parsed from the Granted & Noted List rather
+    than inferred from opinion text -- the Court's own document already
+    states e.g. `Author: J. Kavanaugh` / `Other: Thomas (C); Jackson (D)`
+    per case, which is far more reliable.
+  - The next upcoming oral argument day, with case names and docket
+    numbers, parsed from the Court's monthly **Argument Calendar** PDFs.
+  - Refreshed independently of opinions/orders, at most every
+    `SCOTUS_TERM_DATA_REFRESH_HOURS` (default 12), since this changes far
+    less often.
+- **Serves** a REST API (`app/api/routes.py`) and a dashboard (`static/`)
+  with real client-side routing (Home / Opinions / Orders / a full detail
+  page per case, each a real URL — not a popup), search/filter/sort, a
+  "Refresh now" button, and an in-process scheduler that re-fetches
   periodically.
 
 ## Quickstart
@@ -62,6 +77,7 @@ All settings are environment variables with defaults (see
 | `ANTHROPIC_API_KEY` | unset | Enables Claude-generated summaries |
 | `ANTHROPIC_MODEL` | `claude-sonnet-5` | Model used for summaries |
 | `SCOTUS_REQUEST_DELAY_SECONDS` | `1.0` | Delay between requests to the Court's site |
+| `SCOTUS_TERM_DATA_REFRESH_HOURS` | `12` | How often to re-fetch the current-term label, Granted & Noted List, and argument calendars |
 
 A single fetch caps how many new PDFs it processes per run (25 by default,
 see `document_limit` in `app/ingest.py`) so it stays fast; any backlog
@@ -79,28 +95,39 @@ python scripts/fetch_now.py --terms 25,24 --limit 50
 ## API
 
 - `GET /api/stats` — counts, latest activity, last fetch run, tracked terms
-- `GET /api/opinions?term=&justice=&q=&limit=&offset=` — list opinions
+- `GET /api/term-summary` — current/next term labels and granted-case counts
+- `GET /api/argument-calendar?days=` — next N upcoming argument days with cases
+- `GET /api/opinions?term=&justice=&q=&has_dissent=&sort=&limit=&offset=` — list opinions
+  (`sort` is one of `date_desc`, `date_asc`, `author`, `docket`)
 - `GET /api/opinions/{id}` — full opinion detail including extracted text
+- `POST /api/opinions/{id}/summarize` — generate this opinion's summary now (idempotent)
 - `GET /api/orders?term=&order_type=&notable=&q=&limit=&offset=` — list orders
 - `GET /api/orders/{id}` — full order detail including extracted text
+- `POST /api/orders/{id}/summarize` — generate this order's summary now (idempotent)
 - `GET /api/fetch-runs` — recent fetch run history
 - `POST /api/refresh` — trigger an immediate fetch in the background
+
+Every other path (e.g. `/`, `/opinions`, `/opinion/123`) serves the
+dashboard shell — it's a single-page app with client-side routing, so a
+direct link or a page refresh on any of those URLs works correctly.
 
 ## Project layout
 
 ```
 app/
-  scraper.py      # HTML parsing of the opinions/orders listing pages
-  pdf_extract.py  # PDF download + text extraction
-  summarizer.py    # Boilerplate stripping, syllabus extraction, summarization
-  ingest.py        # Orchestrates scrape -> store -> extract -> summarize
-  models.py        # SQLAlchemy models (Opinion, Order, FetchRun)
-  scheduler.py     # Background periodic fetch
-  api/routes.py    # REST API
-  main.py          # FastAPI app entrypoint
-static/            # Vanilla HTML/CSS/JS dashboard
+  scraper.py        # HTML parsing of the opinions/orders listing pages
+  term_scraper.py    # Current-term label, Granted & Noted List, argument calendars
+  pdf_extract.py     # PDF download + text extraction
+  summarizer.py       # Boilerplate stripping, syllabus extraction, summarization
+  ingest.py           # Orchestrates scrape -> store -> extract -> summarize
+  term_ingest.py      # Orchestrates term-level data refresh + caching
+  models.py           # SQLAlchemy models (Opinion, Order, FetchRun, TermSummary, ArgumentEntry)
+  scheduler.py        # Background periodic fetch
+  api/routes.py       # REST API
+  main.py             # FastAPI app entrypoint + SPA-fallback routing
+static/               # Single-page dashboard (client-side router in app.js)
 scripts/fetch_now.py  # CLI for a one-off fetch
-tests/             # Scraper + summarizer unit tests (fixtures = real HTML)
+tests/                # Unit tests (fixtures = real saved HTML/PDF from the Court's site)
 ```
 
 ## Memory behaviour (running on a small/free instance)
@@ -175,3 +202,15 @@ they don't hit the network.
 - Be a good citizen: the default request delay/timeout are intentionally
   conservative. Don't crank up fetch frequency or parallelism against
   supremecourt.gov.
+- **Next conference day and next opinion-release day are not tracked.**
+  The Court doesn't publish these as text anywhere found -- only as colors
+  on a calendar graphic (a static PDF, and an interactive JS calendar
+  widget that loads each month's data via an ASP.NET AJAX callback). That
+  isn't reliably scrapable, so rather than guess or build something
+  fragile, this is intentionally left out. Argument days, by contrast,
+  *are* published as plain text (the monthly Argument Calendar PDFs) and
+  are tracked.
+- The argument-calendar parser has one known cosmetic gap: when two cases
+  share a single calendar slot (consolidated for one hour of argument),
+  their docket/case-name text isn't split back into two separate entries.
+  Rare in practice; see the comment in `app/term_scraper.py`.

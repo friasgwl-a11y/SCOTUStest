@@ -43,6 +43,11 @@ def offline_scrape(monkeypatch):
         return (FIXTURES / name).read_text(encoding="utf-8", errors="ignore")
 
     monkeypatch.setattr(scraper, "_get", fake_get)
+    # run_fetch also refreshes term-level data (current-term label, Granted
+    # & Noted List, argument calendars) as a supplementary stage; that has
+    # its own dedicated, offline tests in test_term_scraper.py, so it's
+    # stubbed out here to keep these durability tests fast and hermetic.
+    monkeypatch.setattr(ingest, "refresh_term_data", lambda *a, **k: None)
     monkeypatch.setattr(scraper, "REQUEST_DELAY_SECONDS", 0)
 
 

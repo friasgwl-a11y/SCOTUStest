@@ -29,6 +29,19 @@ class Opinion(Base):
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     extraction_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # The following are populated from the Court's own Granted & Noted List
+    # PDF (matched to this row by docket number), not from the opinion PDF
+    # itself -- that document already states the majority author's full
+    # name and, per case, exactly which other Justices concurred or
+    # dissented (and how), which is far more reliable than trying to infer
+    # it by pattern-matching the opinion text.
+    granted_date: Mapped[dt.date | None] = mapped_column(nullable=True)
+    argument_date: Mapped[dt.date | None] = mapped_column(nullable=True, index=True)
+    author_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    separate_opinions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    disposition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    has_dissent: Mapped[bool] = mapped_column(default=False, index=True)
+
     first_seen_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
         default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
@@ -52,6 +65,12 @@ class Opinion(Base):
             "page_count": self.page_count,
             "has_full_text": bool(self.full_text),
             "extraction_error": self.extraction_error,
+            "granted_date": self.granted_date.isoformat() if self.granted_date else None,
+            "argument_date": self.argument_date.isoformat() if self.argument_date else None,
+            "author_name": self.author_name,
+            "separate_opinions": self.separate_opinions,
+            "disposition": self.disposition,
+            "has_dissent": self.has_dissent,
         }
         if include_full_text:
             d["full_text"] = self.full_text
@@ -118,4 +137,54 @@ class FetchRun(Base):
             "new_opinions": self.new_opinions,
             "new_orders": self.new_orders,
             "error": self.error,
+        }
+
+
+class TermSummary(Base):
+    """One row per term, refreshed from the Court's own site metadata and
+    its Granted & Noted List PDF for that term."""
+
+    __tablename__ = "term_summaries"
+
+    term: Mapped[str] = mapped_column(String(8), primary_key=True)
+    label: Mapped[str] = mapped_column(String(32))  # e.g. "October Term 2025"
+    is_current: Mapped[bool] = mapped_column(default=False)
+    total_granted: Mapped[int] = mapped_column(default=0)
+    fetched_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+    source_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "term": self.term,
+            "label": self.label,
+            "is_current": self.is_current,
+            "total_granted": self.total_granted,
+            "fetched_at": self.fetched_at.isoformat(),
+            "source_error": self.source_error,
+        }
+
+
+class ArgumentEntry(Base):
+    """One row per case scheduled for oral argument on a given day, scraped
+    from the Court's monthly Argument Calendar PDFs."""
+
+    __tablename__ = "argument_entries"
+    __table_args__ = (
+        UniqueConstraint("term", "date", "docket", name="uq_argument_entry"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    term: Mapped[str] = mapped_column(String(8), index=True)
+    date: Mapped[dt.date] = mapped_column(index=True)
+    docket: Mapped[str] = mapped_column(String(64))
+    case_name: Mapped[str] = mapped_column(String(512))
+    is_holiday: Mapped[bool] = mapped_column(default=False)
+    fetched_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "term": self.term,
+            "date": self.date.isoformat(),
+            "docket": self.docket,
+            "case_name": self.case_name,
         }

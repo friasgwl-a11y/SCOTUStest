@@ -1,15 +1,3 @@
-const state = {
-  tab: "opinions",
-  page: 0,
-  pageSize: 20,
-  total: 0,
-  search: "",
-  term: "",
-  orderType: "",
-  justice: "",
-  notableOnly: false,
-};
-
 const el = (id) => document.getElementById(id);
 
 async function api(path) {
@@ -22,6 +10,12 @@ function fmtDate(iso) {
   if (!iso) return "Undated";
   const d = new Date(iso + "T00:00:00");
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function fmtDateLong(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 }
 
 function timeAgo(iso) {
@@ -37,7 +31,11 @@ function timeAgo(iso) {
 
 function escapeHtml(s) {
   if (!s) return "";
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function otLabel(term) {
+  return `OT ${2000 + parseInt(term, 10)}`;
 }
 
 function skeletonCards(n) {
@@ -53,6 +51,8 @@ function skeletonCards(n) {
   }
   return html;
 }
+
+// ---------------------------------------------------------------- theme --
 
 function applyTheme(theme) {
   if (theme === "light" || theme === "dark") {
@@ -88,33 +88,60 @@ function initTheme() {
   });
 }
 
-async function loadStats() {
-  const stats = await api("/api/stats");
-  el("statOpinions").textContent = stats.total_opinions;
-  el("statOrders").textContent = stats.total_orders;
-  el("statNotable").textContent = stats.notable_orders;
-  el("statPending").textContent = stats.pending_opinions + stats.pending_orders;
+// --------------------------------------------------------------- router --
 
-  const latest = [stats.latest_opinion_date, stats.latest_order_date]
-    .filter(Boolean)
-    .sort()
-    .pop();
-  el("statLatest").textContent = latest ? fmtDate(latest) : "–";
+function parseRoute(pathname) {
+  const path = pathname.replace(/\/+$/, "") || "/";
+  if (path === "/" || path === "") return { view: "home" };
+  if (path === "/opinions") return { view: "list", type: "opinion" };
+  if (path === "/orders") return { view: "list", type: "order" };
+  let m = path.match(/^\/opinion\/(\d+)$/);
+  if (m) return { view: "detail", type: "opinion", id: m[1] };
+  m = path.match(/^\/order\/(\d+)$/);
+  if (m) return { view: "detail", type: "order", id: m[1] };
+  return { view: "notfound" };
+}
 
-  const termSelect = el("termFilter");
-  const currentValue = termSelect.value;
-  const terms = stats.tracked_terms || [];
-  termSelect.innerHTML = '<option value="">All terms</option>' +
-    terms.map((t) => `<option value="${t}">OT ${2000 + parseInt(t, 10)}</option>`).join("");
-  termSelect.value = currentValue;
+function navigate(path) {
+  if (location.pathname === path) return;
+  history.pushState({}, "", path);
+  render();
+}
 
-  const justiceSelect = el("justiceFilter");
-  const currentJustice = justiceSelect.value;
-  const justices = stats.justices || [];
-  justiceSelect.innerHTML = '<option value="">All authors</option>' +
-    justices.map((j) => `<option value="${j}">${j}</option>`).join("");
-  justiceSelect.value = currentJustice;
+function wireLinkInterception() {
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest("a[data-link]");
+    if (!a) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // let modified clicks behave normally
+    e.preventDefault();
+    navigate(a.getAttribute("href"));
+  });
+  window.addEventListener("popstate", render);
+}
 
+function setActiveNav(view) {
+  document.querySelectorAll(".main-nav a").forEach((a) => {
+    a.classList.toggle("active", a.dataset.nav === (view === "list" ? listState.type + "s" : view));
+  });
+}
+
+// ----------------------------------------------------------- list state --
+
+const listState = {
+  opinion: { page: 0, pageSize: 20, total: 0, search: "", term: "", justice: "", sort: "date_desc", hasDissent: false },
+  order: { page: 0, pageSize: 20, total: 0, search: "", term: "", orderType: "", notableOnly: false },
+};
+listState.type = "opinion"; // which list the current view is showing
+
+let statsCache = null;
+
+async function loadStats(force) {
+  if (statsCache && !force) return statsCache;
+  statsCache = await api("/api/stats");
+  return statsCache;
+}
+
+function updateChrome(stats) {
   const banner = el("errorBanner");
   if (stats.last_fetch_run) {
     const run = stats.last_fetch_run;
@@ -129,25 +156,112 @@ async function loadStats() {
     el("lastRun").textContent = "No fetch yet";
     banner.classList.add("hidden");
   }
-
   el("refreshBtn").disabled = !!stats.refresh_running;
-  if (stats.refresh_running) el("refreshBtn").textContent = "Refreshing…";
-  else el("refreshBtn").textContent = "Refresh now";
-
-  return stats;
+  el("refreshBtn").textContent = stats.refresh_running ? "Refreshing…" : "Refresh now";
 }
 
-function buildQuery() {
+// -------------------------------------------------------------- home view
+
+async function renderHome(app) {
+  app.innerHTML = `<div class="empty-state">${skeletonCards(3)}</div>`;
+
+  const [stats, termSummary, argCal] = await Promise.all([
+    loadStats(true),
+    api("/api/term-summary"),
+    api("/api/argument-calendar?days=1"),
+  ]);
+  updateChrome(stats);
+
+  const current = termSummary.current_term;
+  const next = termSummary.next_term;
+  const upcoming = argCal.upcoming[0];
+
+  const recent = await api("/api/opinions?limit=4");
+  const recentOrders = await api("/api/orders?limit=3");
+  const feed = [
+    ...recent.items.map((o) => ({ ...o, kind: "opinion" })),
+    ...recentOrders.items.map((o) => ({ ...o, kind: "order" })),
+  ]
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+    .slice(0, 6);
+
+  app.innerHTML = `
+    <section class="term-hero">
+      <div class="term-hero-label">${current ? escapeHtml(current.label) : "Current Term"}${current ? "" : " — unavailable"}</div>
+      <div class="term-hero-grid">
+        <div class="term-hero-stat">
+          <div class="term-hero-value">${current ? current.total_granted : "–"}</div>
+          <div class="term-hero-caption">cases granted &amp; noted this term</div>
+        </div>
+        ${next ? `
+        <div class="term-hero-stat term-hero-stat-sm">
+          <div class="term-hero-value-sm">${next.total_granted}</div>
+          <div class="term-hero-caption">granted so far for ${escapeHtml(next.label)}</div>
+        </div>` : ""}
+      </div>
+    </section>
+
+    <div class="home-grid">
+      <section class="home-card">
+        <h2>Next Argument Day</h2>
+        ${upcoming ? `
+          <div class="arg-day-date">${fmtDateLong(upcoming.date)}</div>
+          <ul class="arg-day-cases">
+            ${upcoming.cases.map((c) => `<li><span class="arg-docket">No. ${escapeHtml(c.docket)}</span> ${escapeHtml(titleCase(c.case_name))}</li>`).join("")}
+          </ul>
+        ` : `<p class="muted">No upcoming argument date found yet.</p>`}
+      </section>
+
+      <section class="home-card">
+        <h2>Recent Activity</h2>
+        <ul class="activity-feed">
+          ${feed.map((item) => `
+            <li>
+              <a href="${item.kind === "opinion" ? "/opinion/" : "/order/"}${item.id}" data-link>
+                <span class="activity-date">${fmtDate(item.date)}</span>
+                <span class="activity-title">${item.kind === "opinion" ? escapeHtml(item.case_name) : escapeHtml(item.order_type)}</span>
+              </a>
+            </li>`).join("")}
+        </ul>
+      </section>
+    </div>
+
+    <div class="home-nav-cards">
+      <a class="home-nav-card" href="/opinions" data-link>
+        <div class="home-nav-card-title">Browse Opinions</div>
+        <div class="home-nav-card-count">${stats.total_opinions} tracked</div>
+      </a>
+      <a class="home-nav-card" href="/orders" data-link>
+        <div class="home-nav-card-title">Browse Orders</div>
+        <div class="home-nav-card-count">${stats.total_orders} tracked (${stats.notable_orders} notable)</div>
+      </a>
+    </div>
+  `;
+}
+
+function titleCase(s) {
+  // Granted-list/argument-calendar case names are scraped in ALL CAPS;
+  // title-case them for readability on the home page (the list views show
+  // the original-case names scraped from the opinions page instead).
+  return s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+// -------------------------------------------------------------- list view
+
+function buildQuery(type) {
+  const s = listState[type];
   const params = new URLSearchParams();
-  params.set("limit", state.pageSize);
-  params.set("offset", state.page * state.pageSize);
-  if (state.search) params.set("q", state.search);
-  if (state.term) params.set("term", state.term);
-  if (state.tab === "orders") {
-    if (state.orderType) params.set("order_type", state.orderType);
-    if (state.notableOnly) params.set("notable", "true");
+  params.set("limit", s.pageSize);
+  params.set("offset", s.page * s.pageSize);
+  if (s.search) params.set("q", s.search);
+  if (s.term) params.set("term", s.term);
+  if (type === "order") {
+    if (s.orderType) params.set("order_type", s.orderType);
+    if (s.notableOnly) params.set("notable", "true");
   } else {
-    if (state.justice) params.set("justice", state.justice);
+    if (s.justice) params.set("justice", s.justice);
+    if (s.sort) params.set("sort", s.sort);
+    if (s.hasDissent) params.set("has_dissent", "true");
   }
   return params.toString();
 }
@@ -155,22 +269,21 @@ function buildQuery() {
 function opinionCard(o, index) {
   const badges = [];
   if (o.is_revision) badges.push('<span class="badge badge-revision">Revised</span>');
+  if (o.has_dissent) badges.push('<span class="badge badge-notable">Dissent</span>');
   if (o.extraction_error) badges.push('<span class="badge">Text unavailable</span>');
 
-  // The Court's own holding comes free from the listing page, so an
-  // unsummarized opinion still reads well; the AI summary is the upgrade
-  // you get on opening it.
   const snippet = o.summary || o.holding || "Open to generate a summary.";
   const delay = Math.min(index, 12) * 25;
+  const author = o.author_name || o.justice;
   return `
-    <article class="item-card" data-type="opinion" data-id="${o.id}" style="animation-delay:${delay}ms">
+    <a class="item-card${o.has_dissent ? " notable-card" : ""}" data-link href="/opinion/${o.id}" style="animation-delay:${delay}ms">
       <div class="item-top">
         <div class="item-title">${escapeHtml(o.case_name)}</div>
-        <div class="item-meta">${fmtDate(o.date)} &middot; No. ${escapeHtml(o.docket || "–")}${o.citation ? " &middot; " + escapeHtml(o.citation) + " U.S." : ""}</div>
+        <div class="item-meta">${fmtDate(o.date)} &middot; No. ${escapeHtml(o.docket || "–")}${author ? " &middot; " + escapeHtml(author) : ""}</div>
       </div>
       <div class="item-badges">${badges.join("")}</div>
       <div class="item-snippet">${escapeHtml(snippet).slice(0, 320)}${snippet.length > 320 ? "…" : ""}</div>
-    </article>`;
+    </a>`;
 }
 
 function orderCard(o, index) {
@@ -181,105 +294,182 @@ function orderCard(o, index) {
   const snippet = o.summary || "Open to generate a summary.";
   const delay = Math.min(index, 12) * 25;
   return `
-    <article class="item-card${o.notable ? " notable-card" : ""}" data-type="order" data-id="${o.id}" style="animation-delay:${delay}ms">
+    <a class="item-card${o.notable ? " notable-card" : ""}" data-link href="/order/${o.id}" style="animation-delay:${delay}ms">
       <div class="item-top">
         <div class="item-title">${fmtDate(o.date)}</div>
       </div>
       <div class="item-badges">${badges.join("")}</div>
       <div class="item-snippet">${escapeHtml(snippet).slice(0, 320)}${snippet.length > 320 ? "…" : ""}</div>
-    </article>`;
+    </a>`;
 }
 
-async function loadList() {
+async function renderList(app, type) {
+  listState.type = type;
+  const s = listState[type];
+  const stats = await loadStats();
+  updateChrome(stats);
+
+  const terms = stats.tracked_terms || [];
+  const termOptions = '<option value="">All terms</option>' +
+    terms.map((t) => `<option value="${t}" ${s.term === t ? "selected" : ""}>${otLabel(t)}</option>`).join("");
+
+  app.innerHTML = `
+    <nav class="tabs" role="tablist">
+      <a class="tab ${type === "opinion" ? "active" : ""}" data-link href="/opinions" role="tab">Opinions</a>
+      <a class="tab ${type === "order" ? "active" : ""}" data-link href="/orders" role="tab">Orders</a>
+    </nav>
+
+    <section class="toolbar">
+      <input id="searchInput" type="search" placeholder="Search case name, docket, holding&hellip;" value="${escapeHtml(s.search)}" />
+      <select id="termFilter">${termOptions}</select>
+      ${type === "order" ? `
+        <select id="typeFilter">
+          <option value="">All order types</option>
+          <option value="Order List" ${s.orderType === "Order List" ? "selected" : ""}>Order List</option>
+          <option value="Miscellaneous Order" ${s.orderType === "Miscellaneous Order" ? "selected" : ""}>Miscellaneous Order</option>
+        </select>
+        <label class="notable-toggle"><input type="checkbox" id="notableOnly" ${s.notableOnly ? "checked" : ""} /> Notable only</label>
+      ` : `
+        <select id="justiceFilter">
+          <option value="">All authors</option>
+          ${(stats.justices || []).map((j) => `<option value="${j}" ${s.justice === j ? "selected" : ""}>${j}</option>`).join("")}
+        </select>
+        <select id="sortSelect">
+          <option value="date_desc" ${s.sort === "date_desc" ? "selected" : ""}>Newest first</option>
+          <option value="date_asc" ${s.sort === "date_asc" ? "selected" : ""}>Oldest first</option>
+          <option value="author" ${s.sort === "author" ? "selected" : ""}>By author</option>
+          <option value="docket" ${s.sort === "docket" ? "selected" : ""}>By docket No.</option>
+        </select>
+        <label class="notable-toggle"><input type="checkbox" id="dissentOnly" ${s.hasDissent ? "checked" : ""} /> Has dissent</label>
+      `}
+    </section>
+
+    <section id="listContainer" class="list" aria-live="polite">${skeletonCards(6)}</section>
+
+    <div class="pager">
+      <button id="prevPage" class="btn">&larr; Newer</button>
+      <span id="pageInfo"></span>
+      <button id="nextPage" class="btn">Older &rarr;</button>
+    </div>
+  `;
+
+  wireListControls(type);
+  await loadListItems(type);
+}
+
+let listRequestId = 0;
+
+async function loadListItems(type) {
   const listContainer = el("listContainer");
-  const endpoint = state.tab === "orders" ? "/api/orders" : "/api/opinions";
-  const requestId = ++loadList._requestId;
-  listContainer.innerHTML = skeletonCards(6);
+  const requestId = ++listRequestId;
+  const endpoint = type === "order" ? "/api/orders" : "/api/opinions";
   try {
-    const data = await api(`${endpoint}?${buildQuery()}`);
-    if (requestId !== loadList._requestId) return; // a newer request has since started
-    state.total = data.total;
+    const data = await api(`${endpoint}?${buildQuery(type)}`);
+    if (requestId !== listRequestId) return;
+    listState[type].total = data.total;
     if (!data.items.length) {
       listContainer.innerHTML = '<div class="empty-state">No results.</div>';
     } else {
       listContainer.innerHTML = data.items
-        .map((item, i) => (state.tab === "orders" ? orderCard(item, i) : opinionCard(item, i)))
+        .map((item, i) => (type === "order" ? orderCard(item, i) : opinionCard(item, i)))
         .join("");
     }
-    updatePager();
+    updatePager(type);
   } catch (err) {
-    if (requestId !== loadList._requestId) return;
+    if (requestId !== listRequestId) return;
     listContainer.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
   }
 }
-loadList._requestId = 0;
 
-function updatePager() {
-  const start = state.total === 0 ? 0 : state.page * state.pageSize + 1;
-  const end = Math.min(state.total, (state.page + 1) * state.pageSize);
-  el("pageInfo").textContent = `${start}–${end} of ${state.total}`;
-  el("prevPage").disabled = state.page === 0;
-  el("nextPage").disabled = end >= state.total;
+function updatePager(type) {
+  const s = listState[type];
+  const start = s.total === 0 ? 0 : s.page * s.pageSize + 1;
+  const end = Math.min(s.total, (s.page + 1) * s.pageSize);
+  el("pageInfo").textContent = `${start}–${end} of ${s.total}`;
+  el("prevPage").disabled = s.page === 0;
+  el("nextPage").disabled = end >= s.total;
 }
+
+let searchDebounce;
+function wireListControls(type) {
+  const s = listState[type];
+
+  el("searchInput").addEventListener("input", (e) => {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      s.search = e.target.value.trim();
+      s.page = 0;
+      loadListItems(type);
+    }, 300);
+  });
+
+  el("termFilter").addEventListener("change", (e) => {
+    s.term = e.target.value;
+    s.page = 0;
+    loadListItems(type);
+  });
+
+  if (type === "order") {
+    el("typeFilter").addEventListener("change", (e) => {
+      s.orderType = e.target.value;
+      s.page = 0;
+      loadListItems(type);
+    });
+    el("notableOnly").addEventListener("change", (e) => {
+      s.notableOnly = e.target.checked;
+      s.page = 0;
+      loadListItems(type);
+    });
+  } else {
+    el("justiceFilter").addEventListener("change", (e) => {
+      s.justice = e.target.value;
+      s.page = 0;
+      loadListItems(type);
+    });
+    el("sortSelect").addEventListener("change", (e) => {
+      s.sort = e.target.value;
+      s.page = 0;
+      loadListItems(type);
+    });
+    el("dissentOnly").addEventListener("change", (e) => {
+      s.hasDissent = e.target.checked;
+      s.page = 0;
+      loadListItems(type);
+    });
+  }
+
+  el("prevPage").addEventListener("click", () => {
+    if (s.page > 0) {
+      s.page -= 1;
+      loadListItems(type);
+    }
+  });
+  el("nextPage").addEventListener("click", () => {
+    s.page += 1;
+    loadListItems(type);
+  });
+}
+
+// ------------------------------------------------------------ detail view
 
 function detailSkeleton() {
   return `
-    <div class="skeleton-line w-40" style="height:20px;margin-bottom:14px;"></div>
+    <a class="back-link" href="${listState.type === "order" ? "/orders" : "/opinions"}" data-link>&larr; Back</a>
+    <div class="skeleton-line w-40" style="height:22px;margin:16px 0 14px;"></div>
     <div class="skeleton-line w-25" style="margin-bottom:22px;"></div>
     <div class="skeleton-line w-100"></div>
     <div class="skeleton-line w-100"></div>
     <div class="skeleton-line w-70"></div>`;
 }
 
-async function openDetail(type, id) {
-  const overlay = el("detailOverlay");
-  const content = el("detailContent");
-  overlay.classList.remove("hidden");
-  document.body.style.overflow = "hidden";
-  content.innerHTML = detailSkeleton();
+const DISSENT_CODE_LEGEND = "C = concurring · D = dissenting · C/J = concurring in the judgment · /P = in part";
 
-  const base = `/api/${type === "order" ? "orders" : "opinions"}/${id}`;
-  let data = await api(base);
-
-  // Summaries are generated lazily to keep memory use low, so the first
-  // time anyone opens an older document we produce it now.
-  if (!data.summary && !data.extraction_error) {
-    render(data, true);
-    try {
-      const res = await fetch(`${base}/summarize`, { method: "POST" });
-      if (res.ok) data = await res.json();
-    } catch (err) {
-      /* fall through and render whatever we have */
-    }
-  }
-  render(data, false);
-
-  function render(data, generating) {
-  if (type === "opinion") {
-    content.innerHTML = `
-      <div class="detail-content">
-        <h2>${escapeHtml(data.case_name)}</h2>
-        <div class="detail-meta">
-          ${fmtDate(data.date)} &middot; Docket No. ${escapeHtml(data.docket || "–")}
-          ${data.justice ? " &middot; Author: " + escapeHtml(data.justice) : ""}
-          ${data.citation ? " &middot; " + escapeHtml(data.citation) + " U.S." : ""}
-        </div>
-        ${data.holding ? `<h3>Holding (Court syllabus)</h3><p>${escapeHtml(data.holding)}</p>` : ""}
-        <h3>Summary</h3>
-        <p>${summaryText(data, generating)}</p>
-        <a class="pdf-link" href="${data.pdf_url}" target="_blank" rel="noopener">Read full opinion (PDF) &rarr;</a>
-      </div>`;
-  } else {
-    content.innerHTML = `
-      <div class="detail-content">
-        <h2>${escapeHtml(data.order_type)}</h2>
-        <div class="detail-meta">${fmtDate(data.date)}${data.notable ? " &middot; Flagged notable" : ""}</div>
-        <h3>Summary</h3>
-        <p>${summaryText(data, generating)}</p>
-        <a class="pdf-link" href="${data.pdf_url}" target="_blank" rel="noopener">Read full order (PDF) &rarr;</a>
-      </div>`;
-  }
-  }
+function separateOpinionsHtml(text) {
+  if (!text) return "";
+  return `
+    <h3>Concurrences &amp; Dissents</h3>
+    <p>${escapeHtml(text)}</p>
+    <p class="legend">${DISSENT_CODE_LEGEND}</p>`;
 }
 
 function summaryText(data, generating) {
@@ -291,86 +481,102 @@ function summaryText(data, generating) {
   return "No summary available yet.";
 }
 
-function closeDetail() {
-  el("detailOverlay").classList.add("hidden");
-  document.body.style.overflow = "";
-}
+async function renderDetail(app, type, id) {
+  app.innerHTML = detailSkeleton();
 
-function setTab(tab) {
-  state.tab = tab;
-  state.page = 0;
-  document.querySelectorAll(".tab").forEach((btn) => {
-    const active = btn.dataset.tab === tab;
-    btn.classList.toggle("active", active);
-    btn.setAttribute("aria-selected", active ? "true" : "false");
-  });
-  document.querySelectorAll(".hidden-tab-orders").forEach((elm) => elm.classList.toggle("hidden", tab === "orders"));
-  document.querySelectorAll(".hidden-tab-opinions").forEach((elm) => elm.classList.toggle("hidden", tab === "opinions"));
-  loadList();
-}
+  const base = `/api/${type === "order" ? "orders" : "opinions"}/${id}`;
+  let data;
+  try {
+    data = await api(base);
+  } catch (err) {
+    app.innerHTML = `
+      <a class="back-link" href="${type === "order" ? "/orders" : "/opinions"}" data-link>&larr; Back</a>
+      <div class="empty-state">Couldn't load this ${type} (${escapeHtml(err.message)}).</div>`;
+    return;
+  }
 
-let searchDebounce;
-function wireEvents() {
-  document.querySelectorAll(".tab").forEach((btn) => btn.addEventListener("click", () => setTab(btn.dataset.tab)));
-
-  el("searchInput").addEventListener("input", (e) => {
-    clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(() => {
-      state.search = e.target.value.trim();
-      state.page = 0;
-      loadList();
-    }, 300);
-  });
-
-  el("termFilter").addEventListener("change", (e) => {
-    state.term = e.target.value;
-    state.page = 0;
-    loadList();
-  });
-
-  el("typeFilter").addEventListener("change", (e) => {
-    state.orderType = e.target.value;
-    state.page = 0;
-    loadList();
-  });
-
-  el("justiceFilter").addEventListener("change", (e) => {
-    state.justice = e.target.value;
-    state.page = 0;
-    loadList();
-  });
-
-  el("notableOnly").addEventListener("change", (e) => {
-    state.notableOnly = e.target.checked;
-    state.page = 0;
-    loadList();
-  });
-
-  el("prevPage").addEventListener("click", () => {
-    if (state.page > 0) {
-      state.page -= 1;
-      loadList();
+  const paint = (data, generating) => {
+    const backHref = type === "order" ? "/orders" : "/opinions";
+    if (type === "opinion") {
+      app.innerHTML = `
+        <a class="back-link" href="${backHref}" data-link>&larr; Back to Opinions</a>
+        <article class="detail-page">
+          <h1>${escapeHtml(data.case_name)}</h1>
+          <div class="detail-meta">
+            ${fmtDate(data.date)} &middot; Docket No. ${escapeHtml(data.docket || "–")}
+            ${data.author_name ? " &middot; Author: " + escapeHtml(data.author_name) : (data.justice ? " &middot; Author: " + escapeHtml(data.justice) : "")}
+            ${data.citation ? " &middot; " + escapeHtml(data.citation) + " U.S." : ""}
+          </div>
+          <div class="detail-badges">
+            ${data.is_revision ? '<span class="badge badge-revision">Revised opinion</span>' : ""}
+            ${data.has_dissent ? '<span class="badge badge-notable">Has dissent</span>' : ""}
+          </div>
+          ${data.holding ? `<h3>Holding (Court syllabus)</h3><p>${escapeHtml(data.holding)}</p>` : ""}
+          <h3>Summary</h3>
+          <p>${summaryText(data, generating)}</p>
+          ${data.disposition ? `<h3>Disposition</h3><p>${escapeHtml(data.disposition)}</p>` : ""}
+          ${separateOpinionsHtml(data.separate_opinions)}
+          ${data.argument_date || data.granted_date ? `
+            <h3>Case Timeline</h3>
+            <p>${data.granted_date ? "Granted " + fmtDate(data.granted_date) : ""}${data.granted_date && data.argument_date ? " &middot; " : ""}${data.argument_date ? "Argued " + fmtDate(data.argument_date) : ""}${" &middot; Decided " + fmtDate(data.date)}</p>
+          ` : ""}
+          <a class="pdf-link" href="${data.pdf_url}" target="_blank" rel="noopener">Read full opinion (PDF) &rarr;</a>
+        </article>`;
+    } else {
+      app.innerHTML = `
+        <a class="back-link" href="${backHref}" data-link>&larr; Back to Orders</a>
+        <article class="detail-page">
+          <h1>${escapeHtml(data.order_type)}</h1>
+          <div class="detail-meta">${fmtDate(data.date)}${data.notable ? " &middot; Flagged notable" : ""}</div>
+          <h3>Summary</h3>
+          <p>${summaryText(data, generating)}</p>
+          <a class="pdf-link" href="${data.pdf_url}" target="_blank" rel="noopener">Read full order (PDF) &rarr;</a>
+        </article>`;
     }
-  });
-  el("nextPage").addEventListener("click", () => {
-    state.page += 1;
-    loadList();
-  });
+  };
 
-  el("listContainer").addEventListener("click", (e) => {
-    const card = e.target.closest(".item-card");
-    if (!card) return;
-    openDetail(card.dataset.type, card.dataset.id);
-  });
+  if (!data.summary && !data.extraction_error) {
+    paint(data, true);
+    try {
+      const res = await fetch(`${base}/summarize`, { method: "POST" });
+      if (res.ok) data = await res.json();
+    } catch (err) {
+      /* fall through and render whatever we have */
+    }
+  }
+  paint(data, false);
+}
 
-  el("closeDetail").addEventListener("click", closeDetail);
-  el("detailOverlay").addEventListener("click", (e) => {
-    if (e.target.id === "detailOverlay") closeDetail();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeDetail();
-  });
+// ------------------------------------------------------------------ main --
 
+async function render() {
+  const route = parseRoute(location.pathname);
+  const app = el("app");
+  setActiveNav(route.view === "list" ? route.type + "s" : route.view);
+  window.scrollTo({ top: 0 });
+
+  if (route.view === "home") {
+    await renderHome(app);
+  } else if (route.view === "list") {
+    await renderList(app, route.type);
+  } else if (route.view === "detail") {
+    await renderDetail(app, route.type, route.id);
+  } else {
+    app.innerHTML = `<div class="empty-state">Page not found. <a href="/" data-link>Go home</a>.</div>`;
+  }
+}
+
+async function pollUntilIdle() {
+  const stats = await loadStats(true);
+  updateChrome(stats);
+  if (stats.refresh_running) {
+    setTimeout(pollUntilIdle, 4000);
+  } else if (parseRoute(location.pathname).view !== "detail") {
+    render();
+  }
+}
+
+function wireGlobalActions() {
   el("refreshBtn").addEventListener("click", async () => {
     el("refreshBtn").disabled = true;
     el("refreshBtn").textContent = "Refreshing…";
@@ -379,23 +585,12 @@ function wireEvents() {
   });
 }
 
-async function pollUntilIdle() {
-  const stats = await loadStats();
-  if (stats.refresh_running) {
-    setTimeout(pollUntilIdle, 4000);
-  } else {
-    loadList();
-  }
-}
-
 async function init() {
   initTheme();
-  wireEvents();
-  // setTab applies the per-tab filter visibility, so call it on load rather
-  // than waiting for the first click -- otherwise every filter shows at once.
-  setTab(state.tab);
-  await loadStats();
-  setInterval(loadStats, 30000);
+  wireLinkInterception();
+  wireGlobalActions();
+  await render();
+  setInterval(() => loadStats(true).then(updateChrome), 30000);
 }
 
 init();

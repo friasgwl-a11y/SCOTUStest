@@ -25,6 +25,7 @@ from app.models import FetchRun, Opinion, Order
 from app.pdf_extract import fetch_and_extract
 from app.scraper import fetch_all
 from app.summarizer import is_notable, summarize
+from app.term_ingest import refresh_term_data
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +243,16 @@ def run_fetch(terms: list[str] | None = None, process_documents: bool = True,
                 )[:2000]
             elif failed:
                 logger.info("%d of %d documents failed this run", failed, attempted)
+
+        # Stage 3: term-level data (current-term label, Granted & Noted
+        # List, argument calendars). Internally rate-limited to
+        # TERM_DATA_REFRESH_HOURS, so most calls are a cheap no-op. Kept
+        # non-fatal to the run: this is supplementary context, not the
+        # core opinions/orders catalogue.
+        try:
+            refresh_term_data()
+        except Exception:
+            logger.exception("Term data refresh failed")
     except Exception as exc:
         logger.exception("Fetch run failed")
         status = "error"

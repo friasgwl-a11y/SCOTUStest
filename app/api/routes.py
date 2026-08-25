@@ -9,7 +9,8 @@ from sqlalchemy import func, or_, select
 from app.config import TERMS
 from app.db import session_scope
 from app.ingest import process_document, run_fetch
-from app.models import FetchRun, Opinion, Order
+from app.models import FetchRun, Opinion, Order, TermSummary
+from app.term_ingest import get_next_argument_days
 
 router = APIRouter(prefix="/api")
 
@@ -91,11 +92,21 @@ def stats():
         }
 
 
+_OPINION_SORTS = {
+    "date_desc": (Opinion.date.desc().nulls_last(), Opinion.id.desc()),
+    "date_asc": (Opinion.date.asc().nulls_last(), Opinion.id.desc()),
+    "author": (Opinion.author_name.asc().nulls_last(), Opinion.date.desc().nulls_last()),
+    "docket": (Opinion.docket.asc().nulls_last(),),
+}
+
+
 @router.get("/opinions")
 def list_opinions(
     term: str | None = None,
     justice: str | None = None,
     q: str | None = None,
+    has_dissent: bool | None = None,
+    sort: str = Query("date_desc", pattern="^(date_desc|date_asc|author|docket)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -105,6 +116,8 @@ def list_opinions(
             stmt = stmt.where(Opinion.term == term)
         if justice:
             stmt = stmt.where(Opinion.justice == justice)
+        if has_dissent is not None:
+            stmt = stmt.where(Opinion.has_dissent.is_(has_dissent))
         if q:
             like = f"%{q}%"
             stmt = stmt.where(
@@ -112,18 +125,41 @@ def list_opinions(
                     Opinion.case_name.ilike(like),
                     Opinion.docket.ilike(like),
                     Opinion.holding.ilike(like),
+                    Opinion.author_name.ilike(like),
                 )
             )
         total = session.execute(
             select(func.count()).select_from(stmt.subquery())
         ).scalar_one()
-        stmt = stmt.order_by(Opinion.date.desc().nulls_last(), Opinion.id.desc())
+        stmt = stmt.order_by(*_OPINION_SORTS[sort])
         stmt = stmt.limit(limit).offset(offset)
         items = session.execute(stmt).scalars().all()
         return {
             "total": total,
             "items": [o.to_dict() for o in items],
         }
+
+
+@router.get("/term-summary")
+def term_summary():
+    with session_scope() as session:
+        current = session.execute(
+            select(TermSummary).where(TermSummary.is_current.is_(True))
+        ).scalars().first()
+        next_summary = None
+        if current:
+            next_term_code = str(int(current.term) + 1).zfill(2)
+            next_summary = session.get(TermSummary, next_term_code)
+
+        return {
+            "current_term": current.to_dict() if current else None,
+            "next_term": next_summary.to_dict() if next_summary else None,
+        }
+
+
+@router.get("/argument-calendar")
+def argument_calendar(days: int = Query(1, ge=1, le=30)):
+    return {"upcoming": get_next_argument_days(limit_days=days)}
 
 
 @router.get("/opinions/{opinion_id}")

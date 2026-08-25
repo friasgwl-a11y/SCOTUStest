@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from app.api.routes import router as api_router
 from app.config import FETCH_ON_STARTUP
@@ -33,5 +33,24 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="SCOTUS Tracker", lifespan=lifespan)
 app.include_router(api_router)
 
-if STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+
+@app.get("/app.js")
+def app_js():
+    return FileResponse(STATIC_DIR / "app.js", media_type="application/javascript")
+
+
+@app.get("/styles.css")
+def styles_css():
+    return FileResponse(STATIC_DIR / "styles.css", media_type="text/css")
+
+
+@app.get("/{full_path:path}")
+def spa_fallback(full_path: str):
+    # The dashboard is a single-page app with client-side routing (History
+    # API) for Home/Opinions/Orders/case-detail "pages", so every
+    # non-API, non-asset path serves the same shell -- app.js reads
+    # location.pathname and renders the right view. This is what makes a
+    # direct link to (or refresh of) e.g. /opinions/123 work instead of
+    # 404ing, and what makes the browser back/forward buttons behave like
+    # real navigation.
+    return FileResponse(STATIC_DIR / "index.html")

@@ -28,6 +28,12 @@ TERMS = [t.strip() for t in _default_terms.split(",") if t.strip()]
 FETCH_INTERVAL_MINUTES = int(os.getenv("SCOTUS_FETCH_INTERVAL_MINUTES", "180"))
 FETCH_ON_STARTUP = os.getenv("SCOTUS_FETCH_ON_STARTUP", "true").lower() != "false"
 
+# How often (hours) to re-fetch term-level data: the current-term label,
+# the Granted & Noted List, and the argument calendars. This changes far
+# less often than the opinions/orders listings, so it's cached aggressively
+# and re-fetched only when stale.
+TERM_DATA_REFRESH_HOURS = float(os.getenv("SCOTUS_TERM_DATA_REFRESH_HOURS", "12"))
+
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
