@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SCOTUS Tracker</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark">&#9878;</span>
+      <div>
+        <h1>SCOTUS Tracker</h1>
+        <p class="tagline">Opinions &amp; orders of the Supreme Court of the United States</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="lastRun" class="last-run">&mdash;</span>
+      <button id="refreshBtn" class="btn btn-primary">Refresh now</button>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+  <section class="stats-grid" id="statsGrid" aria-label="Summary statistics">
+    <div class="stat-card"><div class="stat-value" id="statOpinions">&ndash;</div><div class="stat-label">Opinions tracked</div></div>
+    <div class="stat-card"><div class="stat-value" id="statOrders">&ndash;</div><div class="stat-label">Orders tracked</div></div>
+    <div class="stat-card"><div class="stat-value" id="statNotable">&ndash;</div><div class="stat-label">Notable orders</div></div>
+    <div class="stat-card"><div class="stat-value" id="statLatest">&ndash;</div><div class="stat-label">Most recent activity</div></div>
+    <div class="stat-card"><div class="stat-value" id="statPending">&ndash;</div><div class="stat-label">Pending summarization</div></div>
+  </section>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="opinions" role="tab" aria-selected="true">Opinions</button>
+    <button class="tab" data-tab="orders" role="tab" aria-selected="false">Orders</button>
+  </nav>
+
+  <section class="toolbar">
+    <input id="searchInput" type="search" placeholder="Search case name, docket, holding&hellip;" />
+    <select id="termFilter"><option value="">All terms</option></select>
+    <select id="typeFilter" class="hidden-tab-opinions"><option value="">All order types</option><option value="Order List">Order List</option><option value="Miscellaneous Order">Miscellaneous Order</option></select>
+    <select id="justiceFilter" class="hidden-tab-orders"><option value="">All authors</option></select>
+    <label class="notable-toggle hidden-tab-opinions">
+      <input type="checkbox" id="notableOnly" /> Notable only
+    </label>
+  </section>
+
+  <section id="listContainer" class="list" aria-live="polite">
+    <div class="empty-state" id="emptyState">Loading&hellip;</div>
+  </section>
+
+  <div class="pager">
+    <button id="prevPage" class="btn">&larr; Newer</button>
+    <span id="pageInfo"></span>
+    <button id="nextPage" class="btn">Older &rarr;</button>
+  </div>
+</main>
+
+<div id="detailOverlay" class="overlay hidden">
+  <div class="detail-panel">
+    <button id="closeDetail" class="btn btn-close" aria-label="Close">&times;</button>
+    <div id="detailContent"></div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <p>Data sourced directly from <a href="https://www.supremecourt.gov" target="_blank" rel="noopener">supremecourt.gov</a>. Summaries are generated automatically (extractive by default, or via Claude when configured) and may contain errors &mdash; always verify against the official PDF.</p>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+sqlalchemy==2.0.35
+beautifulsoup4==4.12.3
+requests==2.32.3
+pdfplumber==0.11.4
+apscheduler==3.10.4
+python-dotenv==1.0.1
+anthropic==0.34.2
+pytest==8.3.3
