@@ -61,10 +61,21 @@ DOCUMENT_LIMIT = int(os.getenv("SCOTUS_DOCUMENT_LIMIT", "4"))
 # summarization entirely (fully lazy).
 AUTO_PROCESS_DAYS = int(os.getenv("SCOTUS_AUTO_PROCESS_DAYS", "1"))
 
-# Pages read per PDF. Slip opinions put the syllabus and holding up front;
-# the tail is separate opinions and appendices, which cost memory without
-# improving the summary.
+# Pages read per PDF, for orders (opinions use the larger allowance below).
 MAX_PDF_PAGES = int(os.getenv("SCOTUS_MAX_PDF_PAGES", "20"))
 
-# Upper bound on extracted text kept per document.
+# Upper bound on extracted text kept per document, for orders.
 MAX_STORED_TEXT_CHARS = int(os.getenv("SCOTUS_MAX_STORED_TEXT_CHARS", "120000"))
+
+# Opinions get a much larger allowance than orders: a case's concurrences
+# and dissents (reproduced verbatim, like the syllabus) can push total
+# length well past the syllabus/majority alone. Documents are still
+# processed one at a time (see app.ingest._processing_lock), so this only
+# affects peak memory for whichever single opinion is being read right
+# now, not the overall ceiling -- pypdf measured ~0.5MB RSS per page on a
+# 77-page opinion, so even a very long case stays well under a 512MB
+# instance's budget.
+OPINION_MAX_PDF_PAGES = int(os.getenv("SCOTUS_OPINION_MAX_PDF_PAGES", "100"))
+OPINION_MAX_STORED_TEXT_CHARS = int(
+    os.getenv("SCOTUS_OPINION_MAX_STORED_TEXT_CHARS", "500000")
+)

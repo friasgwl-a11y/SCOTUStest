@@ -19,12 +19,18 @@ import threading
 
 from sqlalchemy import select
 
-from app.config import AUTO_PROCESS_DAYS, DOCUMENT_LIMIT, TERMS
+from app.config import (
+    AUTO_PROCESS_DAYS,
+    DOCUMENT_LIMIT,
+    OPINION_MAX_PDF_PAGES,
+    OPINION_MAX_STORED_TEXT_CHARS,
+    TERMS,
+)
 from app.db import session_scope
-from app.models import FetchRun, Opinion, Order
+from app.models import FetchRun, Opinion, Order, SeparateOpinionText
 from app.pdf_extract import fetch_and_extract
 from app.scraper import fetch_all
-from app.summarizer import is_notable, summarize
+from app.summarizer import extract_separate_opinions, is_notable, summarize
 from app.term_ingest import refresh_term_data
 
 logger = logging.getLogger(__name__)
@@ -81,6 +87,48 @@ def _upsert_orders(session, scraped) -> int:
     return new_count
 
 
+def ensure_separate_opinions(session, opinion: Opinion) -> None:
+    """Backfills SeparateOpinionText rows for an opinion once both
+    ingredients are on hand: the extracted PDF text, and the Granted &
+    Noted List's concurrence/dissent breakdown (`separate_opinions`).
+    Those two populate on independent schedules -- the PDF is processed
+    in Stage 2 of a fetch run, the granted-list match happens in Stage 3,
+    sometimes a fetch run later entirely -- so this is called
+    opportunistically wherever an opinion is read back out rather than
+    only right after either one first becomes available. Cheap and
+    idempotent: skips outright if rows already exist, and never re-fetches
+    the PDF (works from whatever full_text is already stored).
+    """
+    if not opinion.full_text or not opinion.separate_opinions:
+        return
+    existing = session.execute(
+        select(SeparateOpinionText.id)
+        .where(SeparateOpinionText.opinion_id == opinion.id)
+        .limit(1)
+    ).first()
+    if existing:
+        return
+    entries = extract_separate_opinions(opinion.full_text, opinion.separate_opinions)
+    for position, entry in enumerate(entries):
+        session.add(
+            SeparateOpinionText(
+                opinion_id=opinion.id,
+                position=position,
+                author=entry["author"],
+                code=entry["code"],
+                label=entry["label"],
+                text=entry["text"],
+            )
+        )
+    if entries:
+        # Sessions here are autoflush=False (see app.db), so a caller that
+        # reads opinion.separate_opinion_texts back in this same session
+        # (e.g. to build the API response) would otherwise see a stale,
+        # empty relationship -- the rows just added aren't visible to a
+        # fresh SELECT until flushed.
+        session.flush()
+
+
 def _pending_ids(model, limit: int, since: dt.date | None = None) -> list[int]:
     with session_scope() as session:
         stmt = select(model.id).where(
@@ -108,12 +156,17 @@ def _process_pending_opinions(limit: int, since: dt.date | None = None) -> tuple
             if opinion is None:
                 continue
             try:
-                text, pages = fetch_and_extract(opinion.pdf_url)
+                text, pages = fetch_and_extract(
+                    opinion.pdf_url,
+                    max_pages=OPINION_MAX_PDF_PAGES,
+                    max_chars=OPINION_MAX_STORED_TEXT_CHARS,
+                )
                 opinion.full_text = text
                 opinion.page_count = pages
                 opinion.summary, opinion.summary_is_syllabus = summarize(
                     text, opinion.case_name, "opinion"
                 )
+                ensure_separate_opinions(session, opinion)
                 ok += 1
             except Exception as exc:
                 logger.warning("Failed to process opinion %s: %s", opinion.pdf_url, exc)
@@ -161,7 +214,9 @@ def process_document(kind: str, document_id: int) -> dict | None:
         if record is None:
             return None
         if record.full_text is not None or record.extraction_error is not None:
-            return record.to_dict()
+            if kind == "opinion":
+                ensure_separate_opinions(session, record)
+            return record.to_dict(detail=(kind == "opinion"))
 
     with _processing_lock:
         with session_scope() as session:
@@ -171,15 +226,25 @@ def process_document(kind: str, document_id: int) -> dict | None:
             # Re-check inside the lock: another request may have processed
             # this same document while we were waiting our turn.
             if record.full_text is not None or record.extraction_error is not None:
-                return record.to_dict()
+                if kind == "opinion":
+                    ensure_separate_opinions(session, record)
+                return record.to_dict(detail=(kind == "opinion"))
             try:
-                text, pages = fetch_and_extract(record.pdf_url)
+                if kind == "opinion":
+                    text, pages = fetch_and_extract(
+                        record.pdf_url,
+                        max_pages=OPINION_MAX_PDF_PAGES,
+                        max_chars=OPINION_MAX_STORED_TEXT_CHARS,
+                    )
+                else:
+                    text, pages = fetch_and_extract(record.pdf_url)
                 record.full_text = text
                 record.page_count = pages
                 if kind == "opinion":
                     record.summary, record.summary_is_syllabus = summarize(
                         text, record.case_name, "opinion"
                     )
+                    ensure_separate_opinions(session, record)
                 else:
                     record.summary, _ = summarize(
                         text, f"{record.order_type} ({record.date})", "order"
@@ -188,7 +253,7 @@ def process_document(kind: str, document_id: int) -> dict | None:
             except Exception as exc:
                 logger.warning("On-demand processing failed for %s: %s", record.pdf_url, exc)
                 record.extraction_error = str(exc)[:2000]
-            return record.to_dict()
+            return record.to_dict(detail=(kind == "opinion"))
 
 
 def run_fetch(terms: list[str] | None = None, process_documents: bool = True,

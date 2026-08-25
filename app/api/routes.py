@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select
 
 from app.config import RECENT_OPINION_DAYS, TERMS
 from app.db import session_scope
-from app.ingest import process_document, run_fetch
+from app.ingest import ensure_separate_opinions, process_document, run_fetch
 from app.models import FetchRun, Opinion, Order, TermSummary
 from app.term_ingest import get_next_argument_days, get_questions_presented
 
@@ -199,7 +199,13 @@ def get_opinion(opinion_id: int):
         opinion = session.get(Opinion, opinion_id)
         if not opinion:
             raise HTTPException(status_code=404, detail="Opinion not found")
-        return opinion.to_dict(include_full_text=True)
+        # Cheap, idempotent backfill: separate_opinions (from the Granted &
+        # Noted List) and full_text (from the PDF) can each land first
+        # depending on fetch timing, so this catches the case where both
+        # are now on hand but the split-out concurrence/dissent text
+        # hasn't been extracted yet. Never re-downloads the PDF.
+        ensure_separate_opinions(session, opinion)
+        return opinion.to_dict(detail=True)
 
 
 @router.get("/orders")
@@ -242,7 +248,7 @@ def get_order(order_id: int):
         order = session.get(Order, order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-        return order.to_dict(include_full_text=True)
+        return order.to_dict()
 
 
 @router.post("/opinions/{opinion_id}/summarize")

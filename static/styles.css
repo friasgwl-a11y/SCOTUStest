@@ -452,6 +452,34 @@ a:hover { color: var(--accent-hover); }
   animation: pulse 1.1s steps(2, end) infinite;
 }
 
+/* Verbatim court text (syllabus, concurrences/dissents) keeps its own
+   paragraph breaks -- these run much longer than a generated summary, so
+   collapsing them into one block hurts readability. */
+.verbatim-text { white-space: pre-line; }
+
+.read-more {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--teal);
+}
+.read-more:hover { color: var(--teal-hover); }
+
+.separate-opinion-card {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-left: 5px solid var(--gold);
+  padding: 14px 16px;
+  margin-top: 12px;
+}
+.separate-opinion-card h3 {
+  margin: 0 0 8px;
+  color: var(--gold);
+}
+.separate-opinion-card h3::before { content: "$ "; color: var(--gold); }
+.separate-opinion-card p { font-size: 13.5px; line-height: 1.65; margin: 0; }
+
 /* ---------- Questions Presented page ---------- */
 .qp-header { margin-bottom: 20px; }
 .qp-header h1 { font-size: 21px; margin: 0 0 6px; }

@@ -1,7 +1,7 @@
 import datetime as dt
 
-from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -51,7 +51,15 @@ class Opinion(Base):
         default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )
 
-    def to_dict(self, include_full_text: bool = False) -> dict:
+    # Default (per-instance) lazy loading is fine here: this attribute is
+    # only ever touched from to_dict(detail=True), which is used exclusively
+    # by the single-opinion detail route, never the list endpoints.
+    separate_opinion_texts: Mapped[list["SeparateOpinionText"]] = relationship(
+        order_by="SeparateOpinionText.position",
+        cascade="all, delete-orphan",
+    )
+
+    def to_dict(self, detail: bool = False) -> dict:
         d = {
             "id": self.id,
             "type": "opinion",
@@ -77,8 +85,8 @@ class Opinion(Base):
             "disposition": self.disposition,
             "has_dissent": self.has_dissent,
         }
-        if include_full_text:
-            d["full_text"] = self.full_text
+        if detail:
+            d["separate_opinion_texts"] = [s.to_dict() for s in self.separate_opinion_texts]
         return d
 
 
@@ -103,8 +111,8 @@ class Order(Base):
         default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )
 
-    def to_dict(self, include_full_text: bool = False) -> dict:
-        d = {
+    def to_dict(self, detail: bool = False) -> dict:
+        return {
             "id": self.id,
             "type": "order",
             "term": self.term,
@@ -117,9 +125,6 @@ class Order(Base):
             "extraction_error": self.extraction_error,
             "notable": self.notable,
         }
-        if include_full_text:
-            d["full_text"] = self.full_text
-        return d
 
 
 class FetchRun(Base):
@@ -226,4 +231,33 @@ class QuestionPresented(Base):
             "lower_court_case_number": self.lower_court_case_number,
             "question_presented": self.question_presented,
             "status_line": self.status_line,
+        }
+
+
+class SeparateOpinionText(Base):
+    """One concurrence or dissent, reproduced verbatim from the opinion
+    PDF, located by author name using the Granted & Noted List's own
+    concurrence/dissent breakdown (Opinion.separate_opinions) rather than
+    by guessing at PDF heading text blindly. See
+    app.summarizer.extract_separate_opinions."""
+
+    __tablename__ = "separate_opinion_texts"
+    __table_args__ = (
+        UniqueConstraint("opinion_id", "position", name="uq_separate_opinion_position"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    opinion_id: Mapped[int] = mapped_column(ForeignKey("opinions.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)  # order of appearance in the PDF
+    author: Mapped[str] = mapped_column(String(64))
+    code: Mapped[str] = mapped_column(String(32))
+    label: Mapped[str] = mapped_column(String(128))
+    text: Mapped[str] = mapped_column(Text)
+
+    def to_dict(self) -> dict:
+        return {
+            "author": self.author,
+            "code": self.code,
+            "label": self.label,
+            "text": self.text,
         }

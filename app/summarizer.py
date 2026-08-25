@@ -37,7 +37,9 @@ _STOPWORDS = {
 # on every page; strip these before summarizing so they don't crowd out
 # substantive sentences.
 _BOILERPLATE_PATTERNS = [
-    re.compile(r"^Cite as:.*$", re.MULTILINE),
+    # "Cite as:" is sometimes justified with extra internal spacing in the
+    # "preliminary print" bound-volume pages ("Cite    as:    606 U. S. ...").
+    re.compile(r"^Cite\s+as:.*$", re.MULTILINE),
     re.compile(r"^\d+\s+OCTOBER TERM,?\s+\d{4}.*$", re.MULTILINE),
     re.compile(r"^Opinion of the Court$", re.MULTILINE),
     re.compile(r"^Per Curiam$", re.MULTILINE),
@@ -47,14 +49,19 @@ _BOILERPLATE_PATTERNS = [
         re.DOTALL,
     ),
     # Running page headers, e.g. "16 WEST VIRGINIA v. B. P. J." repeated on
-    # every page of a slip opinion.
-    re.compile(r"^\d{1,4}\s+[A-Z][A-Z.,&'’\-\s]{2,60}?\sv\.\s[A-Z][A-Z.,&'’\-\s]{1,60}$", re.MULTILINE),
+    # every page of a slip opinion (the "preliminary print" bound-volume
+    # style right-justifies the page number, so the gap before the case
+    # name -- and around "v." -- can run to hundreds of spaces).
+    re.compile(r"^\d{1,4}\s+[A-Z][A-Z.,&'’\-\s]{2,60}?\s+v\.\s+[A-Z][A-Z.,&'’\-\s]{1,60}$", re.MULTILINE),
     # Repeated separate-opinion headers, e.g. "GORSUCH, J., dissenting" or
-    # "THOMAS, J., concurring in part and dissenting in part."
+    # "THOMAS, J., concurring in part and dissenting in part." -- case
+    # insensitive because the "preliminary print" bound-volume pages the
+    # Court's site substitutes in after a term closes render these in
+    # mixed case ("Kagan, J., dissenting") rather than all caps.
     re.compile(
-        r"^[A-Z][A-Z.,\s]{0,40}, (?:C\. )?J\.,\s(?:dissenting|concurring)"
-        r"(?:\sin (?:part|the judgment)(?:\sand dissenting in part)?)?\.?$",
-        re.MULTILINE,
+        r"^[A-Z][A-Z.,\s]{0,40},\s+(?:C\.\s*)?J\.,\s+(?:dissenting|concurring)"
+        r"(?:\s+in\s+(?:part|the judgment)(?:\s+and dissenting in part)?)?\.?$",
+        re.MULTILINE | re.IGNORECASE,
     ),
     # Case-caption block repeated at the start of each separate opinion in a
     # combined PDF (per curiam + dissents), e.g. "SUPREME COURT OF THE
@@ -269,6 +276,123 @@ def summarize(text: str, case_label: str, doc_kind: str = "opinion") -> tuple[st
     if ai_summary:
         return ai_summary, False
     return summarize_extractive(text), False
+
+
+# Parses the Granted & Noted List's own "Other:" breakdown (e.g. "Thomas
+# (C); Kagan (D)" -- see app.term_ingest, populated from a source far more
+# reliable than pattern-matching the opinion PDF blind) into per-Justice
+# entries, then locates each Justice's separate opinion in the PDF text by
+# name. This is the same "reproduce verbatim" approach as the syllabus,
+# just located by author instead of by "Syllabus"/"Held:".
+_SEPARATE_ENTRY_RE = re.compile(r"([A-Za-z][A-Za-z.\- ]*?)\s*\(([CDJP/,\s]*)\)")
+_CODE_LABELS = {"C": "Concurrence", "D": "Dissent"}
+
+
+def _parse_separate_opinion_entries(other_text: str | None) -> list[tuple[str, str]]:
+    if not other_text:
+        return []
+    entries = []
+    for part in other_text.split(";"):
+        m = _SEPARATE_ENTRY_RE.search(part)
+        if m:
+            name = m.group(1).strip()
+            code = re.sub(r"\s+", "", m.group(2))
+            if name and code:
+                entries.append((name, code))
+    return entries
+
+
+def _code_to_label(code: str) -> str:
+    labels = []
+    for part in code.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        base, _, qualifier = part.partition("/")
+        label = _CODE_LABELS.get(base, base)
+        if qualifier == "J":
+            label += " in the judgment"
+        elif qualifier == "P":
+            label += " in part"
+        labels.append(label)
+    return "; ".join(labels) if labels else code
+
+
+def _find_separate_opinion_start(text: str, surname: str) -> int | None:
+    # Anchored to a whole line: a bare inline citation like "(Sotomayor, J.,
+    # dissenting)" cited from within another Justice's opinion has other
+    # prose sharing its line and must not match -- only the standalone
+    # running header that repeats atop every page of that Justice's own
+    # opinion does.
+    pattern = re.compile(
+        r"^\s*" + re.escape(surname) + r"\s*,\s*(?:C\s*\.\s*)?J\s*\.\s*,\s*"
+        r"(?:concurring|dissenting)(?:\s+in\s+(?:part|the\s+judgment))?"
+        r"(?:\s+and\s+dissenting\s+in\s+part)?\.?\s*$",
+        re.MULTILINE | re.IGNORECASE,
+    )
+    m = pattern.search(text)
+    return m.start() if m else None
+
+
+# A revised slip opinion's PDF sometimes ends with a "Reporter's Note"
+# errata addendum describing a correction -- not part of any opinion, so
+# it bounds the last separate opinion's end rather than getting included.
+_TRAILING_APPENDIX_RE = re.compile(r"Reporter\s*['’]?\s*s\s+Note", re.IGNORECASE)
+
+# A long footnote from the end of one opinion sometimes spills onto the
+# first page of the next (a real PDF-layout artifact, not a scraper bug --
+# the footnote physically prints at the bottom of that shared page), so
+# the page carrying a Justice's own running header can still open with a
+# stray leftover paragraph from whoever wrote the previous opinion. Every
+# separate opinion's real text starts with "Justice <Surname>[, with whom
+# ... join,] concurring/dissenting.", so once the header's found, prefer
+# that attribution sentence over the header position itself -- it skips
+# any such spillover without needing to detect it directly.
+_ATTRIBUTION_WINDOW = 4000
+
+
+def _find_attribution_start(text: str, surname: str, window_start: int, window_end: int) -> int | None:
+    pattern = re.compile(r"Justice\s+" + re.escape(surname) + r"\b")
+    m = pattern.search(text, window_start, window_end)
+    return m.start() if m else None
+
+
+def extract_separate_opinions(text: str, other_field: str | None) -> list[dict]:
+    """Reproduces each concurrence/dissent verbatim. Returns a list of
+    {author, code, label, text} dicts in the order they appear in the
+    PDF (not necessarily the order listed in `other_field`). Returns an
+    empty list if there's nothing to show (no separate opinions on this
+    case, or none of them could be located in the extracted text -- e.g.
+    because a very long case's dissent falls past the page/char cap)."""
+    entries = _parse_separate_opinion_entries(other_field)
+    if not entries or not text:
+        return []
+
+    located = []
+    for name, code in entries:
+        start = _find_separate_opinion_start(text, name)
+        if start is not None:
+            located.append((start, name, code))
+    if not located:
+        return []
+    located.sort(key=lambda item: item[0])
+
+    appendix = _TRAILING_APPENDIX_RE.search(text)
+    doc_end = appendix.start() if appendix else len(text)
+
+    results = []
+    for i, (start, name, code) in enumerate(located):
+        stop = located[i + 1][0] if i + 1 < len(located) else doc_end
+        attribution = _find_attribution_start(
+            text, name, start, min(start + _ATTRIBUTION_WINDOW, stop)
+        )
+        begin = attribution if attribution is not None else start
+        segment = _clean_text(text[begin:stop]).strip()
+        if len(segment) > 100:
+            results.append(
+                {"author": name, "code": code, "label": _code_to_label(code), "text": segment}
+            )
+    return results
 
 
 _NOTABLE_RE = re.compile(

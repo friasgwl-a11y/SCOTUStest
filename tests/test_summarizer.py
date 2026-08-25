@@ -1,6 +1,9 @@
 from app.summarizer import (
     _clean_text,
+    _code_to_label,
     _extract_full_syllabus,
+    _parse_separate_opinion_entries,
+    extract_separate_opinions,
     is_notable,
     split_sentences,
     summarize,
@@ -143,6 +146,134 @@ def test_summarize_falls_back_when_no_syllabus():
 def test_summarize_order_never_returns_syllabus():
     text, is_syllabus = summarize(SAMPLE_OPINION_TEXT, "Some Order", "order")
     assert is_syllabus is False
+
+
+SAMPLE_MULTI_OPINION_TEXT = """
+1 EXAMPLE v. TEST CASE
+Opinion of the Court
+JUSTICE EXAMPLE delivered the opinion of the Court.
+This case concerns whether the statute applies retroactively. We hold
+that it does not, for the reasons given below in a lengthy discussion
+that need not be reproduced here in this synthetic fixture text.
+The Court of Appeals is affirmed. It is so ordered.
+
+2 EXAMPLE v. TEST CASE
+
+Roberts, J., concurring.
+
+I agree with the Court's judgment and reasoning in full, and write
+separately only to note that, as Justice Dissent, J., dissenting observes
+elsewhere, the statutory history here is unusually clear, which
+reinforces rather than undermines today's holding for the reasons the
+Court gives.
+
+3 EXAMPLE v. TEST CASE
+
+Roberts, J., concurring
+
+The concurrence continues on this page with more discussion of the
+statutory history and why it supports the Court's reading of the text.
+
+4 EXAMPLE v. TEST CASE
+
+Dissent, J., dissenting.
+
+I would hold that the statute applies retroactively for the reasons
+given by the court below, and I respectfully dissent from the Court's
+contrary conclusion reached today in this case.
+"""
+
+
+def test_parse_separate_opinion_entries():
+    assert _parse_separate_opinion_entries("Thomas (C); Kagan (D)") == [
+        ("Thomas", "C"),
+        ("Kagan", "D"),
+    ]
+    assert _parse_separate_opinion_entries("Sotomayor (C/J)") == [("Sotomayor", "C/J")]
+    assert _parse_separate_opinion_entries(None) == []
+    assert _parse_separate_opinion_entries("") == []
+
+
+def test_code_to_label():
+    assert _code_to_label("C") == "Concurrence"
+    assert _code_to_label("D") == "Dissent"
+    assert _code_to_label("C/J") == "Concurrence in the judgment"
+    assert _code_to_label("D/P") == "Dissent in part"
+
+
+def test_extract_separate_opinions_finds_both_in_document_order():
+    opinions = extract_separate_opinions(SAMPLE_MULTI_OPINION_TEXT, "Roberts (C); Dissent (D)")
+    assert [o["author"] for o in opinions] == ["Roberts", "Dissent"]
+    assert opinions[0]["label"] == "Concurrence"
+    assert opinions[1]["label"] == "Dissent"
+
+
+def test_extract_separate_opinions_ignores_inline_citation():
+    """A mid-paragraph phrase that happens to contain the literal text
+    "Dissent, J., dissenting" -- sharing its line with surrounding prose,
+    the same shape a citation like "(Sotomayor, J., dissenting)" takes
+    inside another Justice's opinion -- must not be mistaken for that
+    Justice's own section heading, which only ever appears alone on its
+    line."""
+    opinions = extract_separate_opinions(SAMPLE_MULTI_OPINION_TEXT, "Roberts (C); Dissent (D)")
+    assert len(opinions) == 2
+    roberts = next(o for o in opinions if o["author"] == "Roberts")
+    assert "Justice Dissent, J., dissenting observes" in roberts["text"]
+    assert "I agree with the Court's judgment" in roberts["text"]
+
+
+def test_extract_separate_opinions_spans_to_next_opinion_or_end():
+    opinions = extract_separate_opinions(SAMPLE_MULTI_OPINION_TEXT, "Roberts (C); Dissent (D)")
+    roberts = next(o for o in opinions if o["author"] == "Roberts")
+    dissent = next(o for o in opinions if o["author"] == "Dissent")
+    assert "concurrence continues on this page" in roberts["text"]
+    assert "I would hold that the statute applies retroactively" in dissent["text"]
+    assert "contrary conclusion reached today in this case." in dissent["text"]
+
+
+def test_extract_separate_opinions_empty_when_no_other_field():
+    assert extract_separate_opinions(SAMPLE_MULTI_OPINION_TEXT, None) == []
+    assert extract_separate_opinions(SAMPLE_MULTI_OPINION_TEXT, "") == []
+
+
+def test_extract_separate_opinions_skips_footnote_spillover():
+    """A long footnote from the end of one opinion sometimes prints onto
+    the first page of the next -- a real PDF-layout quirk in the bound
+    "preliminary print" pages, not a scraper bug. The reproduced text must
+    start at the Justice's own attribution sentence ("Justice X, with whom
+    ... dissenting."), not at whatever spillover paragraph shares that
+    page with the running header."""
+    text = """
+1 EXAMPLE v. TEST CASE
+Opinion of the Court
+JUSTICE EXAMPLE delivered the opinion of the Court.
+The judgment is affirmed. It is so ordered.
+
+2 EXAMPLE v. TEST CASE
+
+Dissent, J., dissenting
+
+leftover footnote text continuing a citation from the previous opinion
+that happens to spill onto this page before the dissent itself begins,
+as sometimes happens with long footnotes near a page break in these
+documents.
+
+Justice Dissent, with whom Justice Second joins, dissenting.
+I would resolve this case differently for the reasons that follow in
+this synthetic fixture text used only to exercise the extraction logic.
+"""
+    opinions = extract_separate_opinions(text, "Dissent (D)")
+    assert len(opinions) == 1
+    assert opinions[0]["text"].startswith("Justice Dissent, with whom Justice Second joins, dissenting.")
+    assert "leftover footnote text" not in opinions[0]["text"]
+
+
+def test_extract_separate_opinions_skips_uncocated_entries():
+    """A Justice listed in the Granted & Noted List's breakdown but not
+    findable in the (possibly page-capped) extracted text is silently
+    dropped rather than raising."""
+    opinions = extract_separate_opinions(SAMPLE_MULTI_OPINION_TEXT, "Roberts (C); Nobody (D)")
+    assert [o["author"] for o in opinions] == ["Roberts"]
 
 
 def test_is_notable_detects_dissent():

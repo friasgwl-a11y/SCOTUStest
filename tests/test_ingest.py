@@ -60,7 +60,7 @@ def _counts(db):
 
 def test_listings_survive_document_processing_crash(db, monkeypatch):
     """An OOM-style crash during PDF processing must not lose the listings."""
-    def boom(url):
+    def boom(url, **kwargs):
         raise MemoryError("simulated OOM kill")
 
     monkeypatch.setattr(ingest, "fetch_and_extract", boom)
@@ -73,7 +73,7 @@ def test_listings_survive_document_processing_crash(db, monkeypatch):
 
 def test_total_document_failure_is_reported_as_error(db, monkeypatch):
     """Every document failing is systemic and must surface, not report success."""
-    def blocked(url):
+    def blocked(url, **kwargs):
         raise RuntimeError("403 Forbidden")
 
     monkeypatch.setattr(ingest, "fetch_and_extract", blocked)
@@ -91,7 +91,7 @@ def test_successful_documents_persist_despite_later_failures(db, monkeypatch):
 
     calls = {"n": 0}
 
-    def flaky(url):
+    def flaky(url, **kwargs):
         calls["n"] += 1
         if calls["n"] > 1:
             raise MemoryError("simulated OOM kill")
@@ -119,7 +119,7 @@ def test_background_run_skips_older_documents(db, monkeypatch):
     """
     processed_urls = []
 
-    def record(url):
+    def record(url, **kwargs):
         processed_urls.append(url)
         return ("some extracted text for the summary", 2)
 
@@ -142,7 +142,7 @@ def test_process_document_generates_summary_on_demand(db, monkeypatch):
     monkeypatch.setattr(ingest, "AUTO_PROCESS_DAYS", 0)
     monkeypatch.setattr(
         ingest, "fetch_and_extract",
-        lambda url: ("The Court holds that the statute is constitutional. "
+        lambda url, **kwargs: ("The Court holds that the statute is constitutional. "
                      "The judgment below is affirmed in full.", 5),
     )
     ingest.run_fetch(terms=["25"], document_limit=10)
@@ -166,7 +166,7 @@ def test_process_document_is_idempotent(db, monkeypatch):
 
     calls = {"n": 0}
 
-    def counting(url):
+    def counting(url, **kwargs):
         calls["n"] += 1
         return ("Extracted text used to build the summary for this case.", 1)
 
@@ -189,9 +189,52 @@ def test_process_document_missing_id_returns_none(db):
     assert ingest.process_document("order", 999999) is None
 
 
+def test_separate_opinions_backfill_when_granted_list_lands_later(db, monkeypatch):
+    """separate_opinions (from the Granted & Noted List) can become known
+    after the opinion PDF was already processed -- those two run on
+    independent schedules. process_document must backfill the split-out
+    concurrence/dissent text from the already-stored full_text rather than
+    requiring both to have been available at the same moment."""
+    from app.models import Opinion
+
+    sample_text = (
+        "1 EXAMPLE v. TEST CASE\nOpinion of the Court\nJUSTICE EXAMPLE "
+        "delivered the opinion of the Court.\nThe judgment is affirmed. It "
+        "is so ordered.\n\n2 EXAMPLE v. TEST CASE\n\nThomas, J., concurring."
+        "\n\nI concur for the reasons given by the Court and write "
+        "separately to add my own view on this important constitutional "
+        "question presented by this case.\n"
+    )
+
+    monkeypatch.setattr(ingest, "AUTO_PROCESS_DAYS", 0)
+    monkeypatch.setattr(ingest, "fetch_and_extract", lambda url, **kwargs: (sample_text, 2))
+    ingest.run_fetch(terms=["25"], document_limit=10)
+
+    with db.session_scope() as session:
+        target_id = session.query(Opinion).filter(Opinion.full_text.is_(None)).first().id
+
+    # First open: PDF gets processed, but separate_opinions isn't known yet
+    # (it arrives from a separate source -- the granted-list match).
+    result = ingest.process_document("opinion", target_id)
+    assert result["separate_opinion_texts"] == []
+
+    # The granted-list match lands later, in a different code path.
+    with db.session_scope() as session:
+        session.get(Opinion, target_id).separate_opinions = "Thomas (C)"
+
+    # Re-opening the case must now backfill the concurrence text from the
+    # already-stored full_text, without re-downloading the PDF.
+    result = ingest.process_document("opinion", target_id)
+    assert len(result["separate_opinion_texts"]) == 1
+    entry = result["separate_opinion_texts"][0]
+    assert entry["author"] == "Thomas"
+    assert entry["label"] == "Concurrence"
+    assert "I concur for the reasons given by the Court" in entry["text"]
+
+
 def test_rerun_resumes_and_does_not_duplicate(db, monkeypatch):
     """A second run re-uses stored listings instead of duplicating them."""
-    monkeypatch.setattr(ingest, "fetch_and_extract", lambda url: ("text body here for summary", 1))
+    monkeypatch.setattr(ingest, "fetch_and_extract", lambda url, **kwargs: ("text body here for summary", 1))
     monkeypatch.setattr(ingest, "AUTO_PROCESS_DAYS", 0)
 
     first = ingest.run_fetch(terms=["25"], document_limit=1)

@@ -9,9 +9,10 @@ path is written to keep peak RSS low:
     is what costs that memory, and we only need the plain text.
   * The download streams to a temporary file rather than being held in
     memory, so the raw PDF bytes never occupy RSS.
-  * Only the first MAX_PDF_PAGES pages are read. A slip opinion's syllabus
-    and holding live at the front; the tail is separate opinions and
-    appendices that add memory without improving the summary.
+  * Only the first max_pages/max_chars pages are read (callers pick the
+    budget: orders use the small MAX_PDF_PAGES/MAX_STORED_TEXT_CHARS
+    default, opinions use the larger OPINION_* allowance so concurrences
+    and dissents are reachable too).
   * Page text is released as we go and the extracted text is capped, so a
     pathologically long document cannot balloon the process.
 """
@@ -62,7 +63,9 @@ def _download_to_tempfile(url: str) -> str:
     return path
 
 
-def extract_text_from_path(path: str, max_pages: int = MAX_PDF_PAGES) -> tuple[str, int]:
+def extract_text_from_path(
+    path: str, max_pages: int = MAX_PDF_PAGES, max_chars: int = MAX_STORED_TEXT_CHARS
+) -> tuple[str, int]:
     """Returns (text, total_page_count). Reads at most max_pages pages."""
     parts: list[str] = []
     size = 0
@@ -84,22 +87,24 @@ def extract_text_from_path(path: str, max_pages: int = MAX_PDF_PAGES) -> tuple[s
                 continue
             parts.append(page_text)
             size += len(page_text)
-            if size >= MAX_STORED_TEXT_CHARS:
+            if size >= max_chars:
                 break
     except PdfExtractionError:
         raise
     except Exception as exc:  # pypdf raises assorted exception types
         raise PdfExtractionError(str(exc)) from exc
 
-    text = "\n\n".join(parts)[:MAX_STORED_TEXT_CHARS].strip()
+    text = "\n\n".join(parts)[:max_chars].strip()
     del parts
     return text, page_count
 
 
-def fetch_and_extract(url: str, max_pages: int = MAX_PDF_PAGES) -> tuple[str, int]:
+def fetch_and_extract(
+    url: str, max_pages: int = MAX_PDF_PAGES, max_chars: int = MAX_STORED_TEXT_CHARS
+) -> tuple[str, int]:
     path = _download_to_tempfile(url)
     try:
-        return extract_text_from_path(path, max_pages=max_pages)
+        return extract_text_from_path(path, max_pages=max_pages, max_chars=max_chars)
     finally:
         try:
             os.unlink(path)

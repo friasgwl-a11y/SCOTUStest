@@ -99,6 +99,10 @@ function parseRoute(pathname) {
   if (m) return { view: "detail", type: "order", id: m[1] };
   m = path.match(/^\/questions-presented\/(\w+)$/);
   if (m) return { view: "qp", term: m[1] };
+  m = path.match(/^\/opinion\/(\d+)\/syllabus$/);
+  if (m) return { view: "opinionFullText", id: m[1], kind: "syllabus" };
+  m = path.match(/^\/opinion\/(\d+)\/separate\/(\d+)$/);
+  if (m) return { view: "opinionFullText", id: m[1], kind: "separate", position: Number(m[2]) };
   return { view: "notfound" };
 }
 
@@ -576,6 +580,34 @@ function separateOpinionsHtml(text) {
     <p class="legend">${DISSENT_CODE_LEGEND}</p>`;
 }
 
+// Truncates on a word/line boundary rather than mid-word, so a long
+// syllabus or separate opinion shows a readable preview with a "Read
+// more" link to its own full-text page instead of the whole thing
+// dominating the case detail page.
+function truncateText(text, limit) {
+  if (!text) return { preview: "", truncated: false };
+  if (text.length <= limit) return { preview: text, truncated: false };
+  const cut = text.slice(0, limit);
+  const breakAt = Math.max(cut.lastIndexOf("\n"), cut.lastIndexOf(" "));
+  const preview = breakAt > limit * 0.6 ? cut.slice(0, breakAt) : cut;
+  return { preview: preview.trim() + "…", truncated: true };
+}
+
+function separateOpinionTextsHtml(entries, opinionId) {
+  if (!entries || !entries.length) return "";
+  return entries
+    .map((entry, position) => {
+      const { preview, truncated } = truncateText(entry.text, 700);
+      return `
+        <div class="separate-opinion-card">
+          <h3>${escapeHtml(entry.label)} &mdash; Justice ${escapeHtml(entry.author)}</h3>
+          <p class="verbatim-text">${escapeHtml(preview)}</p>
+          ${truncated ? `<a class="read-more" href="/opinion/${opinionId}/separate/${position}" data-link>Read full ${escapeHtml(entry.label.toLowerCase())} &rarr;</a>` : ""}
+        </div>`;
+    })
+    .join("");
+}
+
 function summaryText(data, generating) {
   if (data.summary) return escapeHtml(data.summary);
   if (generating) {
@@ -594,6 +626,14 @@ function summaryHeading(data, generating) {
   // Default to "Syllabus" while generating -- almost every opinion has
   // one, and the heading corrects itself once the real data lands.
   return data.summary_is_syllabus || (generating && !data.summary) ? "Syllabus" : "Summary";
+}
+
+function renderSummaryPreview(data) {
+  const { preview, truncated } = truncateText(data.summary, 900);
+  const label = summaryHeading(data, false).toLowerCase();
+  return `
+    <p class="verbatim-text">${escapeHtml(preview)}</p>
+    ${truncated ? `<a class="read-more" href="/opinion/${data.id}/syllabus" data-link>Read full ${label} &rarr;</a>` : ""}`;
 }
 
 async function renderDetail(app, type, id) {
@@ -628,9 +668,10 @@ async function renderDetail(app, type, id) {
           </div>
           ${data.holding ? `<h3>Holding, at a glance</h3><p>${escapeHtml(data.holding)}</p>` : ""}
           <h3>${summaryHeading(data, generating)}</h3>
-          <p>${summaryText(data, generating)}</p>
+          ${data.summary ? renderSummaryPreview(data) : `<p>${summaryText(data, generating)}</p>`}
           ${data.disposition ? `<h3>Disposition</h3><p>${escapeHtml(data.disposition)}</p>` : ""}
           ${separateOpinionsHtml(data.separate_opinions)}
+          ${separateOpinionTextsHtml(data.separate_opinion_texts, data.id)}
           ${data.argument_date || data.granted_date ? `
             <h3>Case Timeline</h3>
             <p>${data.granted_date ? "Granted " + fmtDate(data.granted_date) : ""}${data.granted_date && data.argument_date ? " &middot; " : ""}${data.argument_date ? "Argued " + fmtDate(data.argument_date) : ""}${" &middot; Decided " + fmtDate(data.date)}</p>
@@ -662,6 +703,45 @@ async function renderDetail(app, type, id) {
   paint(data, false);
 }
 
+async function renderOpinionFullText(app, id, kind, position) {
+  app.innerHTML = detailSkeleton();
+  let data;
+  try {
+    data = await api(`/api/opinions/${id}`);
+  } catch (err) {
+    app.innerHTML = `
+      <a class="back-link" href="/opinion/${id}" data-link>&larr; Back</a>
+      <div class="empty-state">Couldn't load this opinion (${escapeHtml(err.message)}).</div>`;
+    return;
+  }
+
+  let heading, text;
+  if (kind === "syllabus") {
+    heading = summaryHeading(data, false);
+    text = data.summary || "";
+  } else {
+    const entry = (data.separate_opinion_texts || [])[position];
+    if (!entry) {
+      app.innerHTML = `
+        <a class="back-link" href="/opinion/${id}" data-link>&larr; Back to ${escapeHtml(data.case_name)}</a>
+        <div class="empty-state">That opinion excerpt isn't available.</div>`;
+      return;
+    }
+    heading = `${entry.label} — Justice ${entry.author}`;
+    text = entry.text;
+  }
+
+  app.innerHTML = `
+    <a class="back-link" href="/opinion/${id}" data-link>&larr; Back to ${escapeHtml(data.case_name)}</a>
+    <article class="detail-page">
+      <h1>${escapeHtml(data.case_name)}</h1>
+      <div class="detail-meta">${fmtDate(data.date)} &middot; Docket No. ${escapeHtml(data.docket || "–")}</div>
+      <h3>${escapeHtml(heading)}</h3>
+      <p class="verbatim-text">${escapeHtml(text)}</p>
+      <a class="pdf-link" href="${data.pdf_url}" target="_blank" rel="noopener">Read full opinion (PDF) &rarr;</a>
+    </article>`;
+}
+
 // ------------------------------------------------------------------ main --
 
 async function render() {
@@ -678,6 +758,8 @@ async function render() {
     await renderDetail(app, route.type, route.id);
   } else if (route.view === "qp") {
     await renderQuestionsPresented(app, route.term);
+  } else if (route.view === "opinionFullText") {
+    await renderOpinionFullText(app, route.id, route.kind, route.position);
   } else {
     app.innerHTML = `<div class="empty-state">Page not found. <a href="/" data-link>Go home</a>.</div>`;
   }

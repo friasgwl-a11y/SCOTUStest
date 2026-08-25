@@ -12,15 +12,29 @@ presents everything in a searchable, filterable web dashboard.
   terms. There is no JSON/RSS feed for this data, so the HTML is parsed
   directly (see `app/scraper.py` for the exact markup this relies on).
 - **Downloads and extracts** PDF text (`app/pdf_extract.py`, via `pypdf`),
-  streaming each download to a temp file and reading only the first
-  `SCOTUS_MAX_PDF_PAGES` pages.
-- **Reproduces the Court's own syllabus verbatim** for opinions that have
-  one (`app/summarizer.py`), rather than summarizing it further: the
-  Reporter of Decisions' syllabus is already an authoritative, condensed
-  statement of the facts, question, and holding, so re-summarizing it can
-  only lose accuracy, not add any. Opinions also carry the Court's own
-  one-line holding (scraped from the case-name link's `title` attribute)
-  as a quick lead-in above the full syllabus.
+  streaming each download to a temp file. Orders read the first
+  `SCOTUS_MAX_PDF_PAGES` pages; opinions read up to
+  `SCOTUS_OPINION_MAX_PDF_PAGES` (much larger by default), since a case's
+  concurrences and dissents can run well past the syllabus alone.
+- **Reproduces the Court's own syllabus, and every concurrence/dissent,
+  verbatim** for opinions that have them (`app/summarizer.py`), rather
+  than summarizing them further: the Reporter of Decisions' syllabus is
+  already an authoritative, condensed statement of the facts, question,
+  and holding, and a Justice's separate opinion is that Justice's own
+  words -- re-summarizing either can only lose accuracy, not add any.
+  Opinions also carry the Court's own one-line holding (scraped from the
+  case-name link's `title` attribute) as a quick lead-in above the full
+  syllabus. Each is shown as a preview with a "Read more" link to its own
+  full-text page, so the case detail page stays scannable.
+  - Each Justice's concurrence/dissent is located in the PDF text **by
+    name**, using the Granted & Noted List's own concurrence/dissent
+    breakdown (see below) as the ground truth for who wrote what --
+    not by guessing at heading text blindly. The two data sources can
+    land at different times (the PDF is processed as soon as it's
+    scraped; the Granted & Noted List match can arrive earlier or later),
+    so this runs opportunistically whenever an opinion is read back out
+    and backfills once both are on hand, without ever re-downloading the
+    PDF (`ensure_separate_opinions` in `app/ingest.py`).
   - **Falls back to a generated summary** only when there's no syllabus to
     show -- most orders, and the rare short per curiam opinion. A
     dependency-free extractive summarizer (word-frequency sentence
@@ -99,6 +113,8 @@ All settings are environment variables with defaults (see
 | `SCOTUS_TERM_DATA_REFRESH_HOURS` | `12` | How often to re-fetch the current-term label, Granted & Noted List, and argument calendars |
 | `SCOTUS_QP_FETCH_LIMIT` | `20` | Max Questions Presented PDFs fetched per term, per refresh cycle |
 | `SCOTUS_RECENT_OPINION_DAYS` | `30` | How many days back the Opinions "Recent" view covers |
+| `SCOTUS_OPINION_MAX_PDF_PAGES` | `100` | Pages read per opinion PDF (large enough to reach concurrences/dissents) |
+| `SCOTUS_OPINION_MAX_STORED_TEXT_CHARS` | `500000` | Cap on extracted text stored per opinion |
 
 A single fetch caps how many new PDFs it processes per run (25 by default,
 see `document_limit` in `app/ingest.py`) so it stays fast; any backlog
@@ -123,17 +139,20 @@ python scripts/fetch_now.py --terms 25,24 --limit 50
   (`sort` is one of `date_desc`, `date_asc`, `author`, `docket`; `scope` is
   `recent` (last `SCOTUS_RECENT_OPINION_DAYS` days), `term` (current term),
   or omitted for no date/term restriction beyond an explicit `term=`)
-- `GET /api/opinions/{id}` — full opinion detail including extracted text
+- `GET /api/opinions/{id}` — full opinion detail, including the full
+  syllabus and each `separate_opinion_texts` entry (`author`, `code`,
+  `label`, `text`) verbatim
 - `POST /api/opinions/{id}/summarize` — generate this opinion's summary now (idempotent)
 - `GET /api/orders?term=&order_type=&notable=&q=&limit=&offset=` — list orders
-- `GET /api/orders/{id}` — full order detail including extracted text
+- `GET /api/orders/{id}` — full order detail
 - `POST /api/orders/{id}/summarize` — generate this order's summary now (idempotent)
 - `GET /api/fetch-runs` — recent fetch run history
 - `POST /api/refresh` — trigger an immediate fetch in the background
 
-Every other path (e.g. `/`, `/opinions`, `/opinion/123`) serves the
-dashboard shell — it's a single-page app with client-side routing, so a
-direct link or a page refresh on any of those URLs works correctly.
+Every other path (e.g. `/`, `/opinions`, `/opinion/123`,
+`/opinion/123/syllabus`, `/opinion/123/separate/0`) serves the dashboard
+shell — it's a single-page app with client-side routing, so a direct link
+or a page refresh on any of those URLs works correctly.
 
 ## Project layout
 
@@ -143,11 +162,11 @@ app/
   term_scraper.py    # Current-term label, Granted & Noted List, argument calendars
   qp_scraper.py       # Questions Presented PDFs (URL built from docket number)
   pdf_extract.py     # PDF download + text extraction
-  summarizer.py       # Boilerplate stripping, syllabus extraction, summarization
+  summarizer.py       # Boilerplate stripping, syllabus + separate-opinion extraction, summarization
   ingest.py           # Orchestrates scrape -> store -> extract -> summarize
   term_ingest.py      # Orchestrates term-level data refresh + caching
   models.py           # SQLAlchemy models (Opinion, Order, FetchRun, TermSummary,
-                       #   ArgumentEntry, QuestionPresented)
+                       #   ArgumentEntry, QuestionPresented, SeparateOpinionText)
   scheduler.py        # Background periodic fetch
   api/routes.py       # REST API
   main.py             # FastAPI app entrypoint + SPA-fallback routing
@@ -160,8 +179,10 @@ tests/                # Unit tests (fixtures = real saved HTML/PDF from the Cour
 
 Free hosting tiers typically cap a service at 512MB, and PDF parsing is by
 far the most memory-hungry thing here. The design keeps peak usage around
-**80MB** measured end-to-end (full scrape of both listing pages plus
-several summaries):
+**80MB** measured end-to-end for orders (full scrape of both listing pages
+plus several summaries); a single long opinion with concurrences/dissents
+can push its own peak higher (still comfortably under budget -- see below),
+but only one document is ever read at a time:
 
 - **`pypdf`, not `pdfplumber`.** Measured on the same 77-page slip
   opinion, pdfplumber peaked at ~354MB and pypdf at ~39MB. pdfplumber's
@@ -173,8 +194,13 @@ several summaries):
 - **Opinions read well before summarizing.** The Court's own one-line
   holding is scraped from the listing page, so the list is informative
   with zero PDFs downloaded.
-- **Page cap.** Only the first `SCOTUS_MAX_PDF_PAGES` (default 20) pages
-  are read; a slip opinion's syllabus and holding are at the front.
+- **Page cap.** Orders read the first `SCOTUS_MAX_PDF_PAGES` (default 20)
+  pages. Opinions read up to `SCOTUS_OPINION_MAX_PDF_PAGES` (default
+  100) -- much larger, since concurrences/dissents (reproduced verbatim)
+  can run well past the syllabus at the front. Measured at ~0.5MB RSS per
+  page with pypdf, so even a 100-page opinion stays well under budget;
+  it's still one document at a time (below), so this raises one case's
+  peak, not the ceiling.
 - **Downloads stream to a temp file**, so raw PDF bytes never sit in RAM.
 - **One document at a time.** A process-wide lock serializes extraction,
   so concurrent visitors can't multiply peak memory.
@@ -182,7 +208,7 @@ several summaries):
   helping on a free instance.
 
 If you still hit the limit, the strongest knobs are
-`SCOTUS_AUTO_PROCESS_DAYS=0`, a lower `SCOTUS_MAX_PDF_PAGES`, and
+`SCOTUS_AUTO_PROCESS_DAYS=0`, a lower `SCOTUS_OPINION_MAX_PDF_PAGES`, and
 `SCOTUS_TERMS=25` (one term instead of two).
 
 ## Deploying so you can view it from a phone/browser anywhere
@@ -246,3 +272,10 @@ they don't hit the network.
   font-encoding quirk of the source PDF, not a bug in the extracted
   boundaries -- the reproduced syllabus text is otherwise verbatim. Read
   the linked PDF for anything where the exact wording matters.
+- Concurrences/dissents are located by author name, matched against the
+  Granted & Noted List's own breakdown -- reliable for *which* Justices
+  wrote separately, but a Justice not found in the extracted text (most
+  often because a very long case's dissent falls past
+  `SCOTUS_OPINION_MAX_PDF_PAGES`/`SCOTUS_OPINION_MAX_STORED_TEXT_CHARS`)
+  is silently omitted rather than shown incorrectly. Read the linked PDF
+  if a separate opinion you expect isn't there.
