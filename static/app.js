@@ -40,6 +40,54 @@ function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+function skeletonCards(n) {
+  let html = "";
+  for (let i = 0; i < n; i++) {
+    html += `
+      <div class="skeleton-card" style="animation-delay:${i * 35}ms">
+        <div class="skeleton-line w-40"></div>
+        <div class="skeleton-line w-25"></div>
+        <div class="skeleton-line w-100"></div>
+        <div class="skeleton-line w-70"></div>
+      </div>`;
+  }
+  return html;
+}
+
+function applyTheme(theme) {
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.setAttribute("data-theme", theme);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+}
+
+function systemPrefersDark() {
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function initTheme() {
+  let saved = null;
+  try {
+    saved = localStorage.getItem("scotus-theme");
+  } catch (e) {
+    /* private browsing / storage blocked: fall back to system preference */
+  }
+  applyTheme(saved);
+
+  el("themeToggle").addEventListener("click", () => {
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark"
+      || (!document.documentElement.getAttribute("data-theme") && systemPrefersDark());
+    const next = isDark ? "light" : "dark";
+    applyTheme(next);
+    try {
+      localStorage.setItem("scotus-theme", next);
+    } catch (e) {
+      /* theme still applies for this page view, just won't persist */
+    }
+  });
+}
+
 async function loadStats() {
   const stats = await api("/api/stats");
   el("statOpinions").textContent = stats.total_opinions;
@@ -104,7 +152,7 @@ function buildQuery() {
   return params.toString();
 }
 
-function opinionCard(o) {
+function opinionCard(o, index) {
   const badges = [];
   if (o.is_revision) badges.push('<span class="badge badge-revision">Revised</span>');
   if (o.extraction_error) badges.push('<span class="badge">Text unavailable</span>');
@@ -113,29 +161,31 @@ function opinionCard(o) {
   // unsummarized opinion still reads well; the AI summary is the upgrade
   // you get on opening it.
   const snippet = o.summary || o.holding || "Open to generate a summary.";
+  const delay = Math.min(index, 12) * 25;
   return `
-    <article class="item-card" data-type="opinion" data-id="${o.id}">
+    <article class="item-card" data-type="opinion" data-id="${o.id}" style="animation-delay:${delay}ms">
       <div class="item-top">
         <div class="item-title">${escapeHtml(o.case_name)}</div>
         <div class="item-meta">${fmtDate(o.date)} &middot; No. ${escapeHtml(o.docket || "–")}${o.citation ? " &middot; " + escapeHtml(o.citation) + " U.S." : ""}</div>
       </div>
-      <div>${badges.join("")}</div>
+      <div class="item-badges">${badges.join("")}</div>
       <div class="item-snippet">${escapeHtml(snippet).slice(0, 320)}${snippet.length > 320 ? "…" : ""}</div>
     </article>`;
 }
 
-function orderCard(o) {
+function orderCard(o, index) {
   const badges = [`<span class="badge">${escapeHtml(o.order_type)}</span>`];
   if (o.notable) badges.push('<span class="badge badge-notable">Notable</span>');
   if (o.extraction_error) badges.push('<span class="badge">Text unavailable</span>');
 
   const snippet = o.summary || "Open to generate a summary.";
+  const delay = Math.min(index, 12) * 25;
   return `
-    <article class="item-card" data-type="order" data-id="${o.id}">
+    <article class="item-card${o.notable ? " notable-card" : ""}" data-type="order" data-id="${o.id}" style="animation-delay:${delay}ms">
       <div class="item-top">
         <div class="item-title">${fmtDate(o.date)}</div>
       </div>
-      <div>${badges.join("")}</div>
+      <div class="item-badges">${badges.join("")}</div>
       <div class="item-snippet">${escapeHtml(snippet).slice(0, 320)}${snippet.length > 320 ? "…" : ""}</div>
     </article>`;
 }
@@ -143,22 +193,26 @@ function orderCard(o) {
 async function loadList() {
   const listContainer = el("listContainer");
   const endpoint = state.tab === "orders" ? "/api/orders" : "/api/opinions";
-  listContainer.innerHTML = '<div class="empty-state">Loading…</div>';
+  const requestId = ++loadList._requestId;
+  listContainer.innerHTML = skeletonCards(6);
   try {
     const data = await api(`${endpoint}?${buildQuery()}`);
+    if (requestId !== loadList._requestId) return; // a newer request has since started
     state.total = data.total;
     if (!data.items.length) {
       listContainer.innerHTML = '<div class="empty-state">No results.</div>';
     } else {
       listContainer.innerHTML = data.items
-        .map((item) => (state.tab === "orders" ? orderCard(item) : opinionCard(item)))
+        .map((item, i) => (state.tab === "orders" ? orderCard(item, i) : opinionCard(item, i)))
         .join("");
     }
     updatePager();
   } catch (err) {
+    if (requestId !== loadList._requestId) return;
     listContainer.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
   }
 }
+loadList._requestId = 0;
 
 function updatePager() {
   const start = state.total === 0 ? 0 : state.page * state.pageSize + 1;
@@ -168,11 +222,21 @@ function updatePager() {
   el("nextPage").disabled = end >= state.total;
 }
 
+function detailSkeleton() {
+  return `
+    <div class="skeleton-line w-40" style="height:20px;margin-bottom:14px;"></div>
+    <div class="skeleton-line w-25" style="margin-bottom:22px;"></div>
+    <div class="skeleton-line w-100"></div>
+    <div class="skeleton-line w-100"></div>
+    <div class="skeleton-line w-70"></div>`;
+}
+
 async function openDetail(type, id) {
   const overlay = el("detailOverlay");
   const content = el("detailContent");
   overlay.classList.remove("hidden");
-  content.innerHTML = '<div class="empty-state">Loading…</div>';
+  document.body.style.overflow = "hidden";
+  content.innerHTML = detailSkeleton();
 
   const base = `/api/${type === "order" ? "orders" : "opinions"}/${id}`;
   let data = await api(base);
@@ -229,6 +293,7 @@ function summaryText(data, generating) {
 
 function closeDetail() {
   el("detailOverlay").classList.add("hidden");
+  document.body.style.overflow = "";
 }
 
 function setTab(tab) {
@@ -324,6 +389,7 @@ async function pollUntilIdle() {
 }
 
 async function init() {
+  initTheme();
   wireEvents();
   // setTab applies the per-tab filter visibility, so call it on load rather
   // than waiting for the first click -- otherwise every filter shows at once.
