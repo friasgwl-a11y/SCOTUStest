@@ -340,7 +340,7 @@ function opinionCard(o, index) {
   if (o.has_dissent) badges.push('<span class="badge badge-notable">Dissent</span>');
   if (o.extraction_error) badges.push('<span class="badge">Text unavailable</span>');
 
-  const snippet = o.summary || o.holding || "Open to generate a summary.";
+  const snippet = o.summary || o.holding || "Open to read the syllabus.";
   const delay = Math.min(index, 12) * 25;
   const author = o.author_name || o.justice;
   return `
@@ -578,11 +578,22 @@ function separateOpinionsHtml(text) {
 
 function summaryText(data, generating) {
   if (data.summary) return escapeHtml(data.summary);
-  if (generating) return '<span class="generating">Generating summary from the PDF…</span>';
+  if (generating) {
+    return data.type === "opinion"
+      ? '<span class="generating">Reading the syllabus from the PDF…</span>'
+      : '<span class="generating">Generating summary from the PDF…</span>';
+  }
   if (data.extraction_error) {
     return "Could not read this PDF. Use the link below to open the official document.";
   }
   return "No summary available yet.";
+}
+
+function summaryHeading(data, generating) {
+  if (data.type !== "opinion") return "Summary";
+  // Default to "Syllabus" while generating -- almost every opinion has
+  // one, and the heading corrects itself once the real data lands.
+  return data.summary_is_syllabus || (generating && !data.summary) ? "Syllabus" : "Summary";
 }
 
 async function renderDetail(app, type, id) {
@@ -615,8 +626,8 @@ async function renderDetail(app, type, id) {
             ${data.is_revision ? '<span class="badge badge-revision">Revised opinion</span>' : ""}
             ${data.has_dissent ? '<span class="badge badge-notable">Has dissent</span>' : ""}
           </div>
-          ${data.holding ? `<h3>Holding (Court syllabus)</h3><p>${escapeHtml(data.holding)}</p>` : ""}
-          <h3>Summary</h3>
+          ${data.holding ? `<h3>Holding, at a glance</h3><p>${escapeHtml(data.holding)}</p>` : ""}
+          <h3>${summaryHeading(data, generating)}</h3>
           <p>${summaryText(data, generating)}</p>
           ${data.disposition ? `<h3>Disposition</h3><p>${escapeHtml(data.disposition)}</p>` : ""}
           ${separateOpinionsHtml(data.separate_opinions)}

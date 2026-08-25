@@ -26,6 +26,10 @@ class Opinion(Base):
 
     full_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # True when `summary` is the Reporter of Decisions' own syllabus
+    # reproduced verbatim, rather than a generated summary (the fallback
+    # for the rare opinion with no syllabus section).
+    summary_is_syllabus: Mapped[bool] = mapped_column(default=False)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     extraction_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -62,6 +66,7 @@ class Opinion(Base):
             "holding": self.holding,
             "is_revision": self.is_revision,
             "summary": self.summary,
+            "summary_is_syllabus": self.summary_is_syllabus,
             "page_count": self.page_count,
             "has_full_text": bool(self.full_text),
             "extraction_error": self.extraction_error,

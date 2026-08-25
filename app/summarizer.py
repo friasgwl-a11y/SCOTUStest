@@ -60,6 +60,9 @@ _BOILERPLATE_PATTERNS = [
     # combined PDF (per curiam + dissents), e.g. "SUPREME COURT OF THE
     # UNITED STATES / ___ / No. 26A124 / ___ / ... / [August 24, 2026]".
     re.compile(r"SUPREME COURT OF THE UNITED STATES.{0,800}?\[[A-Za-z]+ \d{1,2}, \d{4}\]", re.DOTALL),
+    # "Syllabus" repeats as a running page header throughout the syllabus
+    # section (every page), same as "Opinion of the Court" does in the body.
+    re.compile(r"^Syllabus$", re.MULTILINE),
 ]
 
 
@@ -179,50 +182,93 @@ def summarize_with_anthropic(text: str, case_label: str, doc_kind: str) -> str |
         return None
 
 
+def _loose(phrase: str) -> str:
+    """Matches `phrase` tolerating stray whitespace between any of its
+    letters (but requiring real whitespace between its words). Some slip
+    opinions -- especially the "preliminary print" bound-volume pages the
+    Court's site substitutes in once a term's slip opinions are folded
+    into a printed volume -- apply per-glyph justification that pypdf
+    surfaces as extra whitespace mid-word (e.g. "delivered the opini on
+    of the Cour t"), which a plain literal match misses."""
+    words = phrase.split(" ")
+    return r"\s+".join(r"\s*".join(re.escape(ch) for ch in w) for w in words)
+
+
 _SYLLABUS_START_RE = re.compile(r"\bSyllabus\b")
-# The syllabus states the disposition after "Held:", which is the single
-# most useful sentence in the document. Starting there skips the case
-# caption ("SUPREME COURT OF THE UNITED STATES / Syllabus / X v. Y / ON
-# WRIT OF CERTIORARI...") that otherwise dominates the extracted summary.
-_HELD_RE = re.compile(r"\bHeld\s*:")
+# The case caption/docket line ("CERTIORARI TO THE ... CIRCUIT / No. 24-297.
+# Argued April 22, 2025—Decided June 27, 2025") separates the "Syllabus"
+# heading from the facts paragraph that actually starts the substance.
+# Starting after it skips the caption without losing the facts, unlike the
+# old approach of starting at "Held:" (which dropped the facts entirely).
+_DOCKET_CAPTION_RE = re.compile(r"No\.\s+\S[^\n]*(?:Argued|Submitted|Decided)[^\n]*")
+# What follows a syllabus is always some variant of "<Justice> delivered
+# the opinion/judgment of the Court" or "PER CURIAM" -- but the surname is
+# unpredictable (any sitting Justice) and, in the bound-volume pages,
+# often rendered without the "JUSTICE" prefix at all, so match on the
+# stable trailing phrase rather than the name.
 _SYLLABUS_END_RE = re.compile(
-    r"JUSTICE\s+[A-Z]+\s+delivered the opinion|Opinion of the Court|"
-    r"PER CURIAM|delivered a? ?per curiam opinion",
+    "|".join(
+        _loose(p)
+        for p in [
+            "delivered the opinion of the Court",
+            "delivered the judgment of the Court",
+            "announced the judgment of the Court",
+            "delivered a per curiam opinion",
+            "PER CURIAM",
+        ]
+    )
 )
 
 
-def _extract_syllabus(text: str) -> str | None:
-    """Slip opinions with a syllabus include the Reporter of Decisions'
-    own headnote summarizing the holding — a much better summarization
-    source than the full multi-page opinion body. Returns None if no
-    syllabus section is found (e.g. orders, short per curiam opinions)."""
+# The line right before the end marker is always the Justice attribution
+# that leads into the cut "delivered the opinion..." sentence -- either
+# "JUSTICE <NAME>" (standard slip opinions) or "<surname>, J.," / ", C. J.,"
+# (the bound "preliminary print" pages' style). Strip that dangling
+# fragment from the end.
+_TRAILING_ATTRIBUTION_RE = re.compile(
+    r"(?:JUSTICE\s+[A-Z.'’\-]+|[A-Z][A-Za-z.'’\-]{1,30}\s*,\s*(?:C\.\s*)?J\s*\.\s*,?)\s*$"
+)
+
+
+def _extract_full_syllabus(text: str) -> str | None:
+    """Slip opinions with a syllabus include the Reporter of Decisions' own
+    headnote -- an authoritative, already-condensed statement of the facts,
+    question, and holding. Returns the full syllabus (facts through Held),
+    boilerplate-cleaned, or None if no syllabus section is found (e.g.
+    orders, short per curiam opinions)."""
     start = _SYLLABUS_START_RE.search(text)
     if not start:
         return None
     end = _SYLLABUS_END_RE.search(text, start.end())
-    stop = end.start() if end else min(len(text), start.end() + 8000)
+    stop = end.start() if end else min(len(text), start.end() + 20000)
 
-    # Prefer starting at "Held:" -- that is the disposition itself, and it
-    # skips the case caption that otherwise leads the extracted summary.
-    held = _HELD_RE.search(text, start.end(), stop)
-    begin = held.end() if held else start.end()
+    docket = _DOCKET_CAPTION_RE.search(text, start.end(), stop)
+    begin = docket.end() if docket else start.end()
 
-    segment = text[begin:stop].strip()
+    segment = _clean_text(text[begin:stop])
+    segment = _TRAILING_ATTRIBUTION_RE.sub("", segment).rstrip()
     return segment if len(segment) > 200 else None
 
 
-def summarize(text: str, case_label: str, doc_kind: str = "opinion") -> str:
+def summarize(text: str, case_label: str, doc_kind: str = "opinion") -> tuple[str, bool]:
+    """Returns (text, is_verbatim_syllabus).
+
+    Opinions with a syllabus get it reproduced verbatim: it's already the
+    Court's own authoritative summary, so re-summarizing it risks losing
+    accuracy for no benefit. Generated summarization (Claude, or the
+    offline extractive fallback) only runs when there's no syllabus to
+    show -- most orders, and the rare short per curiam opinion.
+    """
     if not text or not text.strip():
-        return ""
-    source_text = text
+        return "", False
     if doc_kind == "opinion":
-        syllabus = _extract_syllabus(text)
+        syllabus = _extract_full_syllabus(text)
         if syllabus:
-            source_text = syllabus
-    ai_summary = summarize_with_anthropic(source_text, case_label, doc_kind)
+            return syllabus, True
+    ai_summary = summarize_with_anthropic(text, case_label, doc_kind)
     if ai_summary:
-        return ai_summary
-    return summarize_extractive(source_text)
+        return ai_summary, False
+    return summarize_extractive(text), False
 
 
 _NOTABLE_RE = re.compile(

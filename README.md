@@ -14,14 +14,19 @@ presents everything in a searchable, filterable web dashboard.
 - **Downloads and extracts** PDF text (`app/pdf_extract.py`, via `pypdf`),
   streaming each download to a temp file and reading only the first
   `SCOTUS_MAX_PDF_PAGES` pages.
-- **Summarizes** each document (`app/summarizer.py`):
-  - Opinions carry the Court's own one-line syllabus/holding (scraped from
-    the case-name link's `title` attribute) for free.
-  - A dependency-free extractive summarizer (word-frequency sentence
-    scoring) runs on the syllabus or full text and always works offline.
-  - If `ANTHROPIC_API_KEY` is set, summaries are upgraded to a real
-    abstractive summary from Claude instead; any failure falls back to the
-    extractive summary silently.
+- **Reproduces the Court's own syllabus verbatim** for opinions that have
+  one (`app/summarizer.py`), rather than summarizing it further: the
+  Reporter of Decisions' syllabus is already an authoritative, condensed
+  statement of the facts, question, and holding, so re-summarizing it can
+  only lose accuracy, not add any. Opinions also carry the Court's own
+  one-line holding (scraped from the case-name link's `title` attribute)
+  as a quick lead-in above the full syllabus.
+  - **Falls back to a generated summary** only when there's no syllabus to
+    show -- most orders, and the rare short per curiam opinion. A
+    dependency-free extractive summarizer (word-frequency sentence
+    scoring) always works offline; if `ANTHROPIC_API_KEY` is set, it's
+    upgraded to a real abstractive summary from Claude instead, with any
+    failure falling back to the extractive summary silently.
   - Orders are flagged **notable** when their text mentions a dissent,
     concurrence, separate statement, or a grant/stay of certiorari.
 - **Stores** everything in SQLite (`app/models.py`), so re-running a fetch
@@ -235,3 +240,9 @@ they don't hit the network.
   share a single calendar slot (consolidated for one hour of argument),
   their docket/case-name text isn't split back into two separate entries.
   Rare in practice; see the comment in `app/term_scraper.py`.
+- Some slip opinions' PDF fonts don't map the "fi"/"ffi" ligature glyph
+  back to plain text, so pypdf occasionally drops or splits a letter in
+  words like "officials" or "five" (e.g. "offcials", "fve"). This is a
+  font-encoding quirk of the source PDF, not a bug in the extracted
+  boundaries -- the reproduced syllabus text is otherwise verbatim. Read
+  the linked PDF for anything where the exact wording matters.

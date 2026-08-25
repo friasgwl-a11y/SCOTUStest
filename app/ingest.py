@@ -111,7 +111,9 @@ def _process_pending_opinions(limit: int, since: dt.date | None = None) -> tuple
                 text, pages = fetch_and_extract(opinion.pdf_url)
                 opinion.full_text = text
                 opinion.page_count = pages
-                opinion.summary = summarize(text, opinion.case_name, "opinion")
+                opinion.summary, opinion.summary_is_syllabus = summarize(
+                    text, opinion.case_name, "opinion"
+                )
                 ok += 1
             except Exception as exc:
                 logger.warning("Failed to process opinion %s: %s", opinion.pdf_url, exc)
@@ -134,7 +136,7 @@ def _process_pending_orders(limit: int, since: dt.date | None = None) -> tuple[i
                 text, pages = fetch_and_extract(order.pdf_url)
                 order.full_text = text
                 order.page_count = pages
-                order.summary = summarize(text, f"{order.order_type} ({order.date})", "order")
+                order.summary, _ = summarize(text, f"{order.order_type} ({order.date})", "order")
                 order.notable = is_notable(text)
                 ok += 1
             except Exception as exc:
@@ -175,9 +177,11 @@ def process_document(kind: str, document_id: int) -> dict | None:
                 record.full_text = text
                 record.page_count = pages
                 if kind == "opinion":
-                    record.summary = summarize(text, record.case_name, "opinion")
+                    record.summary, record.summary_is_syllabus = summarize(
+                        text, record.case_name, "opinion"
+                    )
                 else:
-                    record.summary = summarize(
+                    record.summary, _ = summarize(
                         text, f"{record.order_type} ({record.date})", "order"
                     )
                     record.notable = is_notable(text)
