@@ -17,6 +17,10 @@ import re
 
 from app.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, MAX_SUMMARY_SENTENCES
 
+from app.votes import code_to_label as _code_to_label
+from app.votes import parse_vote_entries as _parse_separate_opinion_entries
+
+
 logger = logging.getLogger(__name__)
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"“])")
@@ -279,43 +283,8 @@ def summarize(text: str, case_label: str, doc_kind: str = "opinion") -> tuple[st
 
 
 # Parses the Granted & Noted List's own "Other:" breakdown (e.g. "Thomas
-# (C); Kagan (D)" -- see app.term_ingest, populated from a source far more
-# reliable than pattern-matching the opinion PDF blind) into per-Justice
-# entries, then locates each Justice's separate opinion in the PDF text by
-# name. This is the same "reproduce verbatim" approach as the syllabus,
-# just located by author instead of by "Syllabus"/"Held:".
-_SEPARATE_ENTRY_RE = re.compile(r"([A-Za-z][A-Za-z.\- ]*?)\s*\(([CDJP/,\s]*)\)")
-_CODE_LABELS = {"C": "Concurrence", "D": "Dissent"}
-
-
-def _parse_separate_opinion_entries(other_text: str | None) -> list[tuple[str, str]]:
-    if not other_text:
-        return []
-    entries = []
-    for part in other_text.split(";"):
-        m = _SEPARATE_ENTRY_RE.search(part)
-        if m:
-            name = m.group(1).strip()
-            code = re.sub(r"\s+", "", m.group(2))
-            if name and code:
-                entries.append((name, code))
-    return entries
-
-
-def _code_to_label(code: str) -> str:
-    labels = []
-    for part in code.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        base, _, qualifier = part.partition("/")
-        label = _CODE_LABELS.get(base, base)
-        if qualifier == "J":
-            label += " in the judgment"
-        elif qualifier == "P":
-            label += " in part"
-        labels.append(label)
-    return "; ".join(labels) if labels else code
+# (C); Kagan (D)") into per-Justice entries -- see app.votes -- then
+# locates each Justice's separate opinion in the PDF text by name.
 
 
 def _find_separate_opinion_start(text: str, surname: str) -> int | None:

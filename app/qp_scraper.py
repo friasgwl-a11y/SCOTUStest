@@ -28,23 +28,19 @@ from dataclasses import dataclass
 import requests
 
 from app.config import BASE_URL, REQUEST_TIMEOUT, USER_AGENT
+from app.dockets import normalize_docket
 
 logger = logging.getLogger(__name__)
 
 _APPLICATION_DOCKET_RE = re.compile(r"^(\d+)A(\d+)$")
 _CERT_DOCKET_RE = re.compile(r"^(\d+)-(\d+)$")
-_SUFFIX_RE = re.compile(r"[)\d]*[*#]?$")
 
 
 def normalize_docket_for_qp(raw_docket: str) -> str | None:
     """Strips consolidated-case/unanimous-flag suffixes and returns the QP
     filename stem (without "qp.pdf"), or None if the docket doesn't match
     a known format."""
-    docket = raw_docket.strip()
-    # Strip a trailing consolidated marker like ")1" and/or a unanimous
-    # flag like "*"/"#", e.g. "24-1021)1*" -> "24-1021".
-    docket = re.sub(r"\)\d+", "", docket)
-    docket = docket.rstrip("*#")
+    docket = normalize_docket(raw_docket)
 
     if _APPLICATION_DOCKET_RE.match(docket):
         return docket

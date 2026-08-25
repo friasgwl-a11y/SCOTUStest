@@ -129,6 +129,31 @@ def ensure_separate_opinions(session, opinion: Opinion) -> None:
         session.flush()
 
 
+def _backfill_all_separate_opinions() -> int:
+    """Stage-3 follow-up: the Granted & Noted List match can land *after*
+    a PDF has already been processed, so ensure_separate_opinions during
+    Stage 2 often has nothing to split yet. Walk opinions that now have
+    both ingredients and split them. Cheap and idempotent."""
+    filled = 0
+    with session_scope() as session:
+        already = set(
+            session.execute(select(SeparateOpinionText.opinion_id).distinct()).scalars()
+        )
+        opinions = session.execute(
+            select(Opinion).where(
+                Opinion.full_text.isnot(None),
+                Opinion.separate_opinions.isnot(None),
+            )
+        ).scalars().all()
+        for opinion in opinions:
+            if opinion.id in already:
+                continue
+            ensure_separate_opinions(session, opinion)
+            if opinion.id not in already:
+                filled += 1
+    return filled
+
+
 def _pending_ids(model, limit: int, since: dt.date | None = None) -> list[int]:
     with session_scope() as session:
         stmt = select(model.id).where(
@@ -257,7 +282,7 @@ def process_document(kind: str, document_id: int) -> dict | None:
 
 
 def run_fetch(terms: list[str] | None = None, process_documents: bool = True,
-              document_limit: int | None = None) -> dict:
+              document_limit: int | None = None, force_term_data: bool = False) -> dict:
     """Scrapes listings for the given terms, stores new items, and extracts
     text/summaries for a batch of previously-unprocessed documents.
 
@@ -315,11 +340,15 @@ def run_fetch(terms: list[str] | None = None, process_documents: bool = True,
 
         # Stage 3: term-level data (current-term label, Granted & Noted
         # List, argument calendars). Internally rate-limited to
-        # TERM_DATA_REFRESH_HOURS, so most calls are a cheap no-op. Kept
+        # TERM_DATA_REFRESH_HOURS, so most calls are a cheap no-op --
+        # except a user-triggered refresh (force_term_data) and a run
+        # that just added new opinions, both of which rematch so dissent
+        # / concurrence indicators attach to newly-seen cases. Kept
         # non-fatal to the run: this is supplementary context, not the
         # core opinions/orders catalogue.
         try:
-            refresh_term_data()
+            refresh_term_data(force=force_term_data or new_opinions > 0)
+            _backfill_all_separate_opinions()
         except Exception:
             logger.exception("Term data refresh failed")
     except Exception as exc:

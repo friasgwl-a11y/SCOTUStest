@@ -11,10 +11,11 @@ import datetime as dt
 import logging
 import re
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.config import QP_FETCH_LIMIT, TERM_DATA_REFRESH_HOURS
+from app.config import QP_FETCH_LIMIT, TERM_DATA_REFRESH_HOURS, TERMS
 from app.db import session_scope
+from app.dockets import normalize_docket
 from app.models import ArgumentEntry, Opinion, QuestionPresented, TermSummary
 from app.qp_scraper import fetch_qp
 from app.term_scraper import (
@@ -23,11 +24,11 @@ from app.term_scraper import (
     fetch_term_links,
     get_current_and_next_term,
 )
+from app.votes import has_dissent
 
 logger = logging.getLogger(__name__)
 
 _AUTHOR_PREFIX_RE = re.compile(r"^J\.\s*")
-_DISSENT_CODE_RE = re.compile(r"\(([CDJP/,\s]*)\)")
 
 
 def _clean_author(raw: str | None) -> str | None:
@@ -36,22 +37,34 @@ def _clean_author(raw: str | None) -> str | None:
     return _AUTHOR_PREFIX_RE.sub("", raw).strip() or None
 
 
-def _has_dissent(other_text: str | None) -> bool:
-    if not other_text:
-        return False
-    for m in _DISSENT_CODE_RE.finditer(other_text):
-        if re.search(r"(?<![A-Z])D(?![A-Za-z])", m.group(1)):
-            return True
-    return False
-
-
 def _is_stale(term: str) -> bool:
     with session_scope() as session:
         row = session.get(TermSummary, term)
         if row is None:
             return True
+        # A previous failed fetch leaves source_error set and must not
+        # sit on the 12h cache -- otherwise a transient 404/timeout
+        # silences retries until the clock runs out.
+        if row.source_error:
+            return True
         age = dt.datetime.utcnow() - row.fetched_at
         return age.total_seconds() > TERM_DATA_REFRESH_HOURS * 3600
+
+
+def _term_has_unmatched_opinions(term: str) -> bool:
+    """True when this term has decided opinions that still lack Granted &
+    Noted List metadata. Used to re-download a "fresh" list after new
+    opinions land, instead of waiting the full refresh window."""
+    with session_scope() as session:
+        unmatched = session.execute(
+            select(func.count(Opinion.id)).where(
+                Opinion.term == term,
+                Opinion.docket.isnot(None),
+                Opinion.author_name.is_(None),
+                Opinion.separate_opinions.is_(None),
+            )
+        ).scalar_one()
+        return unmatched > 0
 
 
 def _refresh_granted_list(term: str, label: str, is_current: bool) -> list | None:
@@ -61,16 +74,23 @@ def _refresh_granted_list(term: str, label: str, is_current: bool) -> list | Non
         logger.warning("Failed to fetch granted/noted list for term %s: %s", term, exc)
         with session_scope() as session:
             existing = session.get(TermSummary, term)
-            session.add(
-                TermSummary(
-                    term=term,
-                    label=label,
-                    is_current=is_current,
-                    total_granted=existing.total_granted if existing else 0,
-                    fetched_at=dt.datetime.utcnow(),
-                    source_error=str(exc)[:500],
+            if existing is None:
+                session.add(
+                    TermSummary(
+                        term=term,
+                        label=label,
+                        is_current=is_current,
+                        total_granted=0,
+                        # Epoch so _is_stale immediately retries rather
+                        # than caching a failed fetch for 12 hours.
+                        fetched_at=dt.datetime(1970, 1, 1),
+                        source_error=str(exc)[:500],
+                    )
                 )
-            )
+            else:
+                existing.label = label
+                existing.is_current = is_current
+                existing.source_error = str(exc)[:500]
         return None
 
     with session_scope() as session:
@@ -85,18 +105,28 @@ def _refresh_granted_list(term: str, label: str, is_current: bool) -> list | Non
             )
         )
 
+        opinions = session.execute(select(Opinion).where(Opinion.term == term)).scalars().all()
+        by_docket: dict[str, list] = {}
+        for opinion in opinions:
+            key = normalize_docket(opinion.docket)
+            if key:
+                by_docket.setdefault(key, []).append(opinion)
+
+        matched = 0
         for case in cases:
-            opinion = session.execute(
-                select(Opinion).where(Opinion.term == term, Opinion.docket == case.docket)
-            ).scalars().first()
-            if not opinion:
-                continue
-            opinion.granted_date = case.granted_date
-            opinion.argument_date = case.argument_date
-            opinion.author_name = _clean_author(case.author)
-            opinion.separate_opinions = case.other
-            opinion.disposition = case.result
-            opinion.has_dissent = _has_dissent(case.other)
+            key = normalize_docket(case.docket)
+            for opinion in by_docket.get(key, []):
+                opinion.granted_date = case.granted_date
+                opinion.argument_date = case.argument_date
+                opinion.author_name = _clean_author(case.author)
+                opinion.separate_opinions = case.other
+                opinion.disposition = case.result
+                opinion.has_dissent = has_dissent(case.other)
+                matched += 1
+        logger.info(
+            "Granted-list match for OT%s: %d cases, %d opinion row(s) updated",
+            term, len(cases), matched,
+        )
 
     return cases
 
@@ -166,9 +196,6 @@ def _refresh_argument_calendar(term: str) -> None:
 
 def refresh_term_data(force: bool = False) -> None:
     current_term, next_term = get_current_and_next_term()
-    if not current_term:
-        logger.info("Could not determine current term from the Court's site; skipping term data refresh")
-        return
 
     try:
         links = fetch_term_links()
@@ -177,12 +204,34 @@ def refresh_term_data(force: bool = False) -> None:
         links = []
     labels = {t.term: t.label for t in links}
 
-    for term, is_current in [(current_term, True), (next_term, False)]:
-        if not term:
+    planned: list[tuple[str, bool]] = []
+    seen: set[str] = set()
+    if current_term:
+        planned.append((current_term, True))
+        seen.add(current_term)
+    if next_term and next_term not in seen:
+        planned.append((next_term, False))
+        seen.add(next_term)
+    # Also refresh every configured tracked term (e.g. the previous OT).
+    # Restricting to current+next left OT24 opinions with no author /
+    # dissent metadata even though TERMS includes "24".
+    for term in TERMS:
+        if term not in seen:
+            planned.append((term, False))
+            seen.add(term)
+
+    if not planned:
+        logger.info("Could not determine any term to refresh; skipping term data")
+        return
+
+    for term, is_current in planned:
+        if not force and not _is_stale(term) and not _term_has_unmatched_opinions(term):
             continue
-        if not force and not _is_stale(term):
-            continue
-        label = labels.get(term, f"October Term {2000 + int(term)}")
+        try:
+            year = 2000 + int(term)
+        except ValueError:
+            year = 2000
+        label = labels.get(term, f"October Term {year}")
         cases = _refresh_granted_list(term, label, is_current)
         _refresh_argument_calendar(term)
         if cases:

@@ -194,7 +194,7 @@ async function renderHome(app) {
   const next = termSummary.next_term;
   const upcoming = argCal.upcoming[0];
 
-  const recent = await api("/api/opinions?limit=4");
+  const recent = await api("/api/opinions?limit=4&scope=recent");
   const recentOrders = await api("/api/orders?limit=3");
   const feed = [
     ...recent.items.map((o) => ({ ...o, kind: "opinion" })),
@@ -241,6 +241,7 @@ async function renderHome(app) {
               <a href="${item.kind === "opinion" ? "/opinion/" : "/order/"}${item.id}" data-link>
                 <span class="activity-date">${fmtDate(item.date)}</span>
                 <span class="activity-title">${item.kind === "opinion" ? escapeHtml(item.case_name) : escapeHtml(item.order_type)}</span>
+                ${item.kind === "opinion" ? activityMarks(item) : ""}
               </a>
             </li>`).join("")}
         </ul>
@@ -338,22 +339,49 @@ function buildQuery(type) {
   return params.toString();
 }
 
-function opinionCard(o, index) {
+function activityMarks(o) {
+  const bits = [];
+  if (o.has_dissent) bits.push('<span class="badge badge-dissent">D</span>');
+  if (o.has_concurrence) bits.push('<span class="badge badge-concur">C</span>');
+  if (!bits.length) return "";
+  return `<span class="activity-marks">${bits.join("")}</span>`;
+}
+
+// Per-Justice breakdown (who dissented/concurred, by name) when the API
+// has it (vote_breakdown, from the Granted & Noted List); falls back to
+// the coarser has_dissent/has_concurrence flags otherwise.
+function voteChips(o) {
+  const votes = o.vote_breakdown || [];
   const badges = [];
   if (o.is_revision) badges.push('<span class="badge badge-revision">Revised</span>');
-  if (o.has_dissent) badges.push('<span class="badge badge-notable">Dissent</span>');
   if (o.extraction_error) badges.push('<span class="badge">Text unavailable</span>');
+  const author = o.author_name || o.justice;
+  if (author) badges.push(`<span class="badge badge-majority">Maj. ${escapeHtml(author)}</span>`);
+  const dissents = votes.filter((v) => v.has_dissent);
+  const concurs = votes.filter((v) => v.has_concurrence);
+  if (dissents.length) {
+    badges.push(`<span class="badge badge-dissent">Dissent: ${escapeHtml(dissents.map((v) => v.author).join(", "))}</span>`);
+  } else if (o.has_dissent) {
+    badges.push('<span class="badge badge-dissent">Dissent</span>');
+  }
+  if (concurs.length) {
+    badges.push(`<span class="badge badge-concur">Concur: ${escapeHtml(concurs.map((v) => v.author).join(", "))}</span>`);
+  } else if (o.has_concurrence) {
+    badges.push('<span class="badge badge-concur">Concurrence</span>');
+  }
+  return badges.join("");
+}
 
+function opinionCard(o, index) {
   const snippet = o.summary || o.holding || "Open to read the syllabus.";
   const delay = Math.min(index, 12) * 25;
-  const author = o.author_name || o.justice;
   return `
     <a class="item-card${o.has_dissent ? " notable-card" : ""}" data-link href="/opinion/${o.id}" style="animation-delay:${delay}ms">
       <div class="item-top">
         <div class="item-title">${escapeHtml(o.case_name)}</div>
-        <div class="item-meta">${fmtDate(o.date)} &middot; No. ${escapeHtml(o.docket || "–")}${author ? " &middot; " + escapeHtml(author) : ""}</div>
+        <div class="item-meta">${fmtDate(o.date)} &middot; No. ${escapeHtml(o.docket || "–")}</div>
       </div>
-      <div class="item-badges">${badges.join("")}</div>
+      <div class="item-badges">${voteChips(o)}</div>
       <div class="item-snippet">${escapeHtml(snippet).slice(0, 320)}${snippet.length > 320 ? "…" : ""}</div>
     </a>`;
 }
@@ -572,11 +600,21 @@ function detailSkeleton() {
 
 const DISSENT_CODE_LEGEND = "C = concurring · D = dissenting · C/J = concurring in the judgment · /P = in part";
 
-function separateOpinionsHtml(text) {
-  if (!text) return "";
+function separateOpinionsHtml(data) {
+  const votes = data.vote_breakdown || [];
+  const raw = data.separate_opinions;
+  if (!votes.length && !raw) return "";
+  const badges = votes.length
+    ? votes
+        .map((v) => {
+          const kind = v.has_dissent ? "badge-dissent" : "badge-concur";
+          return `<span class="badge ${kind}">${escapeHtml(v.author)}: ${escapeHtml(v.label)}</span>`;
+        })
+        .join("")
+    : `<span class="badge">${escapeHtml(raw)}</span>`;
   return `
     <h3>Concurrences &amp; Dissents</h3>
-    <p>${escapeHtml(text)}</p>
+    <div class="item-badges">${badges}</div>
     <p class="legend">${DISSENT_CODE_LEGEND}</p>`;
 }
 
@@ -662,15 +700,12 @@ async function renderDetail(app, type, id) {
             ${data.author_name ? " &middot; Author: " + escapeHtml(data.author_name) : (data.justice ? " &middot; Author: " + escapeHtml(data.justice) : "")}
             ${data.citation ? " &middot; " + escapeHtml(data.citation) + " U.S." : ""}
           </div>
-          <div class="detail-badges">
-            ${data.is_revision ? '<span class="badge badge-revision">Revised opinion</span>' : ""}
-            ${data.has_dissent ? '<span class="badge badge-notable">Has dissent</span>' : ""}
-          </div>
+          <div class="detail-badges">${voteChips(data)}</div>
           ${data.holding ? `<h3>Holding, at a glance</h3><p>${escapeHtml(data.holding)}</p>` : ""}
           <h3>${summaryHeading(data, generating)}</h3>
           ${data.summary ? renderSummaryPreview(data) : `<p>${summaryText(data, generating)}</p>`}
           ${data.disposition ? `<h3>Disposition</h3><p>${escapeHtml(data.disposition)}</p>` : ""}
-          ${separateOpinionsHtml(data.separate_opinions)}
+          ${separateOpinionsHtml(data)}
           ${separateOpinionTextsHtml(data.separate_opinion_texts, data.id)}
           ${data.argument_date || data.granted_date ? `
             <h3>Case Timeline</h3>

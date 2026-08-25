@@ -73,6 +73,39 @@ def test_parse_granted_noted_list_consolidated_cases_share_fields():
     assert little.decided_date == west_virginia.decided_date
 
 
+def test_parse_granted_noted_list_strips_docket_suffixes():
+    """Granted-list dockets carry typographic flags (* # ) )N) that the
+    opinion listing pages do not. Stored dockets must be the clean form
+    so they match later."""
+    pdf_bytes = (PDFS / "granted25_sample.pdf").read_bytes()
+    cases = {c.docket: c for c in parse_granted_noted_list(pdf_bytes)}
+    assert "24-171#" not in cases
+    assert "24-171" in cases
+    assert cases["24-171"].author == "J. Thomas"
+    assert cases["24-171"].other == "Sotomayor (C/J)"
+    assert "24-820)" not in cases
+    assert cases["24-820"].other == "Sotomayor (D)"
+    assert "24-1021)1*" not in cases
+    assert "24-1021" in cases
+    assert "24-1287" in cases
+
+
+def test_parse_granted_noted_list_other_field_stops_at_reargument_date():
+    pdf_bytes = (PDFS / "granted25_sample.pdf").read_bytes()
+    cases = {c.docket: c for c in parse_granted_noted_list(pdf_bytes)}
+    other = cases["24-109"].other
+    assert other is not None
+    assert "Reargument" not in other
+    assert "Thomas (D)" in other
+
+
+def test_parse_granted_noted_list_stacked_vote_codes():
+    pdf_bytes = (PDFS / "granted25_sample.pdf").read_bytes()
+    cases = {c.docket: c for c in parse_granted_noted_list(pdf_bytes)}
+    assert "C/J/P" in (cases["24-43"].other or "")
+    assert "D/P" in (cases["24-43"].other or "")
+
+
 def test_parse_monthly_argument_calendar_dates_and_cases():
     pdf_bytes = (PDFS / "argcal_october2026_sample.pdf").read_bytes()
     days = parse_monthly_argument_calendar(pdf_bytes)

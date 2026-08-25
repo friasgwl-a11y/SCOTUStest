@@ -14,6 +14,8 @@ def test_normalize_docket_strips_consolidated_and_flag_suffixes():
     assert normalize_docket_for_qp("24-1021)1*") == "24-01021"
     assert normalize_docket_for_qp("23-1209*") == "23-01209"
     assert normalize_docket_for_qp("24-171#") == "24-00171"
+    assert normalize_docket_for_qp("24-820)") == "24-00820"
+    assert normalize_docket_for_qp("24-109)") == "24-00109"
 
 
 def test_normalize_docket_leaves_application_dockets_unpadded():

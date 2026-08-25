@@ -286,7 +286,11 @@ def fetch_runs(limit: int = Query(20, ge=1, le=100)):
 def _background_refresh() -> None:
     global _refresh_running
     try:
-        run_fetch()
+        # A user-clicked Refresh should re-pull the Granted & Noted List
+        # even if it was fetched recently -- that's how dissent /
+        # concurrence indicators catch up after a listing scrape that
+        # landed between the 12h term-data windows.
+        run_fetch(force_term_data=True)
     finally:
         _refresh_running = False
 

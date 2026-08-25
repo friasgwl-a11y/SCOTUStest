@@ -29,6 +29,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from app.config import BASE_URL, REQUEST_TIMEOUT, USER_AGENT
+from app.dockets import normalize_docket
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +194,7 @@ _DOCKET_LINE_RE = re.compile(
     re.MULTILINE,
 )
 _FIELD_STOP = (
-    r"(?:Court:|Order:|Granted:|Argument Date:|Decided:|Author:|Other:|Result:|"
+    r"(?:Court:|Order:|Granted:|Argument Date:|Reargument Date:|Decided:|Author:|Other:|Result:|"
     # Repeated page header/footer boilerplate, which otherwise gets pulled
     # into whichever field (usually "Result:") happens to end near a page
     # boundary -- verified against real page breaks in the OT2025 list.
@@ -225,6 +226,18 @@ def _extract_field(block: str, label: str) -> str | None:
     return value or None
 
 
+def _other_field(block: str) -> str | None:
+    """The Other: field sometimes opens with a leftover date from a
+    previous revision line ("6/27/25 – Thomas (D)") and, before
+    Reargument Date: was a field-stop, used to swallow the next label
+    too. Strip the date prefix so vote parsing sees a clean breakdown."""
+    value = _extract_field(block, "Other:")
+    if not value:
+        return None
+    value = re.sub(r"^\d{1,2}/\d{1,2}/\d{2,4}\s*[–\-]\s*", "", value).strip()
+    return value or None
+
+
 def parse_granted_noted_list(pdf_bytes: bytes) -> list[GrantedCase]:
     from app.pdf_extract import extract_text_from_path
     import os
@@ -243,7 +256,7 @@ def parse_granted_noted_list(pdf_bytes: bytes) -> list[GrantedCase]:
     pending_consolidated: list[tuple[str, str]] = []  # (docket, name) sharing the next field block
 
     for i, anchor in enumerate(anchors):
-        docket = re.sub(r"\s+", "", anchor.group("docket"))
+        docket = normalize_docket(re.sub(r"\s+", "", anchor.group("docket")))
         name_start = anchor.group("name").strip()
         block_start = anchor.end()
         block_end = anchors[i + 1].start() if i + 1 < len(anchors) else len(text)
@@ -273,7 +286,7 @@ def parse_granted_noted_list(pdf_bytes: bytes) -> list[GrantedCase]:
                     argument_date=_parse_date(_extract_field(block, "Argument Date:") or ""),
                     decided_date=_parse_date(_extract_field(block, "Decided:") or ""),
                     author=_extract_field(block, "Author:"),
-                    other=_extract_field(block, "Other:"),
+                    other=_other_field(block),
                     result=_extract_field(block, "Result:"),
                 )
             )
@@ -288,7 +301,7 @@ def parse_granted_noted_list(pdf_bytes: bytes) -> list[GrantedCase]:
                 argument_date=_parse_date(_extract_field(block, "Argument Date:") or ""),
                 decided_date=_parse_date(_extract_field(block, "Decided:") or ""),
                 author=_extract_field(block, "Author:"),
-                other=_extract_field(block, "Other:"),
+                other=_other_field(block),
                 result=_extract_field(block, "Result:"),
             )
         )
@@ -396,7 +409,7 @@ def _parse_calendar_column(text: str, year: int) -> list[ArgumentDay]:
                     break
             if not docket_tokens:
                 continue
-            docket = "".join(docket_tokens)
+            docket = normalize_docket("".join(docket_tokens)) or "".join(docket_tokens)
             case_name = " ".join(tokens[len(docket_tokens):])
             # Known limitation: when two cases are consolidated into one
             # calendar slot (one case-number marker, two dockets), this

@@ -53,7 +53,12 @@ presents everything in a searchable, filterable web dashboard.
     for each opinion, also parsed from the Granted & Noted List rather
     than inferred from opinion text -- the Court's own document already
     states e.g. `Author: J. Kavanaugh` / `Other: Thomas (C); Jackson (D)`
-    per case, which is far more reliable.
+    per case, which is far more reliable. Docket numbers are normalized
+    (`app/dockets.py`) before matching, since the Granted & Noted List
+    annotates them with flags (`*`, `#`, `)1`) that the opinion listing
+    doesn't carry -- matching the raw annotated form silently missed and
+    left author/dissent metadata blank. Every tracked term is matched
+    this way, not just the current and next one.
   - The next upcoming oral argument day, with case names and docket
     numbers, parsed from the Court's monthly **Argument Calendar** PDFs.
   - The **question(s) presented** for every case in a term's Granted &
@@ -161,6 +166,8 @@ app/
   scraper.py        # HTML parsing of the opinions/orders listing pages
   term_scraper.py    # Current-term label, Granted & Noted List, argument calendars
   qp_scraper.py       # Questions Presented PDFs (URL built from docket number)
+  dockets.py          # Normalizes docket numbers (strips list-legend/consolidation flags)
+  votes.py            # Parses the Granted & Noted List's "Other:" concurrence/dissent codes
   pdf_extract.py     # PDF download + text extraction
   summarizer.py       # Boilerplate stripping, syllabus + separate-opinion extraction, summarization
   ingest.py           # Orchestrates scrape -> store -> extract -> summarize

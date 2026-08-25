@@ -199,6 +199,9 @@ def test_code_to_label():
     assert _code_to_label("D") == "Dissent"
     assert _code_to_label("C/J") == "Concurrence in the judgment"
     assert _code_to_label("D/P") == "Dissent in part"
+    assert _code_to_label("C/J/P") == "Concurrence in the judgment in part"
+    assert _code_to_label("C/P, C/J") == "Concurrence in part; Concurrence in the judgment"
+    assert _code_to_label("C/J/P, D/P") == "Concurrence in the judgment in part; Dissent in part"
 
 
 def test_extract_separate_opinions_finds_both_in_document_order():

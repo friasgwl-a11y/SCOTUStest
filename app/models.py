@@ -3,6 +3,9 @@ import datetime as dt
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from app.votes import has_concurrence as _text_has_concurrence
+from app.votes import vote_breakdown as _vote_breakdown
+
 
 class Base(DeclarativeBase):
     pass
@@ -84,6 +87,8 @@ class Opinion(Base):
             "separate_opinions": self.separate_opinions,
             "disposition": self.disposition,
             "has_dissent": self.has_dissent,
+            "has_concurrence": _text_has_concurrence(self.separate_opinions),
+            "vote_breakdown": _vote_breakdown(self.separate_opinions),
         }
         if detail:
             d["separate_opinion_texts"] = [s.to_dict() for s in self.separate_opinion_texts]

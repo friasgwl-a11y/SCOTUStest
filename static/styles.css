@@ -384,7 +384,9 @@ a:hover { color: var(--accent-hover); }
 }
 .activity-feed a:hover { color: var(--accent); }
 .activity-date { font-size: 11px; color: var(--text-faint); flex-shrink: 0; font-variant-numeric: tabular-nums; }
-.activity-title { font-size: 13px; }
+.activity-title { font-size: 13px; flex: 1 1 auto; min-width: 0; }
+.activity-marks { flex-shrink: 0; display: inline-flex; gap: 4px; }
+.activity-marks .badge { margin-right: 0; }
 
 .home-nav-cards {
   display: grid;
@@ -668,6 +670,9 @@ a:hover { color: var(--accent-hover); }
 .badge::after { content: "]"; }
 .badge-notable { background: var(--notable-bg); color: var(--notable); border-color: var(--notable); }
 .badge-revision { background: var(--gold-soft); color: var(--gold); border-color: var(--gold); }
+.badge-majority { background: var(--navy-soft); color: var(--navy); border-color: var(--navy); }
+.badge-dissent { background: var(--amber-soft); color: var(--amber); border-color: var(--amber); }
+.badge-concur { background: var(--green-soft); color: var(--green); border-color: var(--green); }
 
 /* ---------- Skeleton loading ---------- */
 .skeleton-card {
