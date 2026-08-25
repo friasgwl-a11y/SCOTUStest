@@ -1,25 +1,54 @@
 /* ---------- Design tokens ---------- */
+/* A 5-hue palette, each color with one job, on a light "legal ledger"
+   base by default (light is the enforced default identity regardless of
+   the visitor's system preference -- dark is available, but opt-in only,
+   toggled manually):
+     navy   - primary interactive color: links, nav, primary buttons
+     green  - "granted" / positive: term-hero, success states
+     gold   - citations, revisions, official/reference markers
+     teal   - scheduling & tech elements: argument days, QP page
+     amber  - alerts: dissents, notable flags, errors
+*/
 :root {
-  /* Light mode: "paper terminal" -- a legal ledger rendered on a CRT.
-     Parchment background, ink-black chunky borders, deep-green accent. */
   --bg: #eef0e4;
   --surface: #f8f9f0;
-  --surface-hover: #eef0e4;
+  --surface-hover: #e9ecdd;
   --surface-raised: #ffffff;
   --border: #1c1f18;
   --border-strong: #000000;
   --text: #14170f;
   --text-muted: #4b5442;
   --text-faint: #74806a;
-  --accent: #1f6f43;
-  --accent-hover: #14522f;
-  --accent-soft: #dbe8d2;
-  --notable: #8a4b00;
-  --notable-bg: #f3e3c8;
+
+  --navy: #1d3461;
+  --navy-hover: #14264a;
+  --navy-soft: #dbe2ef;
+  --green: #1f6f43;
+  --green-hover: #14522f;
+  --green-soft: #dbe8d2;
+  --gold: #92660a;
+  --gold-hover: #6f4d06;
+  --gold-soft: #f0e3bf;
+  --teal: #146b78;
+  --teal-hover: #0d4e58;
+  --teal-soft: #d6e9eb;
+  --amber: #a3390f;
+  --amber-hover: #7d2b0b;
+  --amber-soft: #f6ddc9;
+
+  /* Primary interactive accent = navy; other hues are assigned per
+     component below (term-hero=green, revisions=gold, argument/QP=teal,
+     dissent/notable/errors=amber) rather than through this generic slot. */
+  --accent: var(--navy);
+  --accent-hover: var(--navy-hover);
+  --accent-soft: var(--navy-soft);
+  --notable: var(--amber);
+  --notable-bg: var(--amber-soft);
+
   --skeleton-base: #e2e5d6;
   --skeleton-shine: #f4f6ec;
   --shadow-color: rgba(20, 24, 15, 0.9);
-  --scanline-opacity: 0.035;
+  --scanline-opacity: 0.03;
 
   --shadow-sm: 2px 2px 0 var(--shadow-color);
   --shadow-md: 4px 4px 0 var(--shadow-color);
@@ -36,48 +65,44 @@
   color-scheme: light;
 }
 
-/* System dark preference, unless the user picked light explicitly */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0a0f0a;
-    --surface: #10160f;
-    --surface-hover: #182016;
-    --surface-raised: #141b12;
-    --border: #33452e;
-    --border-strong: #5a7a4f;
-    --text: #d9ead1;
-    --text-muted: #8ea583;
-    --text-faint: #5e7154;
-    --accent: #4ade80;
-    --accent-hover: #86efac;
-    --accent-soft: #16261a;
-    --notable: #ffb454;
-    --notable-bg: #2c2210;
-    --skeleton-base: #182016;
-    --skeleton-shine: #202b1c;
-    --shadow-color: rgba(0, 0, 0, 0.85);
-    color-scheme: dark;
-  }
-}
-
-/* Manual toggle wins regardless of system setting */
+/* Dark is opt-in only (manual toggle) -- deliberately NOT tied to
+   prefers-color-scheme, so a fresh visitor always lands on the light
+   palette regardless of their system setting. */
 :root[data-theme="dark"] {
-  --bg: #0a0f0a;
-  --surface: #10160f;
-  --surface-hover: #182016;
-  --surface-raised: #141b12;
-  --border: #33452e;
-  --border-strong: #5a7a4f;
-  --text: #d9ead1;
-  --text-muted: #8ea583;
-  --text-faint: #5e7154;
-  --accent: #4ade80;
-  --accent-hover: #86efac;
-  --accent-soft: #16261a;
-  --notable: #ffb454;
-  --notable-bg: #2c2210;
-  --skeleton-base: #182016;
-  --skeleton-shine: #202b1c;
+  --bg: #0d1210;
+  --surface: #151b17;
+  --surface-hover: #1d2520;
+  --surface-raised: #182019;
+  --border: #3a4a3c;
+  --border-strong: #6b8a6f;
+  --text: #e4ecdf;
+  --text-muted: #9db298;
+  --text-faint: #647a63;
+
+  --navy: #7fa8e0;
+  --navy-hover: #a3c2ec;
+  --navy-soft: #1c2740;
+  --green: #4ade80;
+  --green-hover: #7cf29e;
+  --green-soft: #16281c;
+  --gold: #e0b84d;
+  --gold-hover: #edcb73;
+  --gold-soft: #332a12;
+  --teal: #4fc3d4;
+  --teal-hover: #7ad6e3;
+  --teal-soft: #123138;
+  --amber: #ff9d5c;
+  --amber-hover: #ffb98a;
+  --amber-soft: #3a2414;
+
+  --accent: var(--navy);
+  --accent-hover: var(--navy-hover);
+  --accent-soft: var(--navy-soft);
+  --notable: var(--amber);
+  --notable-bg: var(--amber-soft);
+
+  --skeleton-base: #1d2520;
+  --skeleton-shine: #253028;
   --shadow-color: rgba(0, 0, 0, 0.85);
   color-scheme: dark;
 }
@@ -243,26 +268,19 @@ a:hover { color: var(--accent-hover); }
 .icon-btn:active { transform: translate(2px, 2px); box-shadow: none; }
 .icon-btn svg { width: 18px; height: 18px; }
 
+/* Dark is manual-only (see the tokens block above), so the icon state is
+   a plain function of data-theme -- sun shows by default (light, the
+   enforced default) and whenever explicitly set to light; moon shows
+   only when explicitly toggled to dark. */
+.theme-toggle { position: relative; }
 .theme-toggle .icon-sun, .theme-toggle .icon-moon {
   position: absolute;
   transition: opacity 0.15s var(--ease);
 }
-.theme-toggle { position: relative; }
-:root[data-theme="dark"] .theme-toggle .icon-sun,
-:root:not([data-theme="light"]) .theme-toggle .icon-sun {
-  opacity: 0;
-}
+.theme-toggle .icon-sun { opacity: 1; }
 .theme-toggle .icon-moon { opacity: 0; }
-:root[data-theme="dark"] .theme-toggle .icon-moon,
-:root:not([data-theme="light"]) .theme-toggle .icon-moon {
-  opacity: 1;
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .theme-toggle .icon-sun { opacity: 1; }
-  :root:not([data-theme]) .theme-toggle .icon-moon { opacity: 0; }
-}
-:root[data-theme="light"] .theme-toggle .icon-sun { opacity: 1; }
-:root[data-theme="light"] .theme-toggle .icon-moon { opacity: 0; }
+:root[data-theme="dark"] .theme-toggle .icon-sun { opacity: 0; }
+:root[data-theme="dark"] .theme-toggle .icon-moon { opacity: 1; }
 
 /* ---------- Layout ---------- */
 .container { max-width: 1120px; margin: 0 auto; padding: 24px 20px 64px; }
@@ -284,7 +302,7 @@ a:hover { color: var(--accent-hover); }
 
 /* ---------- Home: term hero ---------- */
 .term-hero {
-  background: var(--accent);
+  background: var(--green);
   color: var(--surface);
   border: 2px solid var(--border);
   padding: 22px 26px;
@@ -300,10 +318,20 @@ a:hover { color: var(--accent-hover); }
 }
 .term-hero-label::before { content: "> "; }
 .term-hero-grid { display: flex; align-items: baseline; gap: 32px; flex-wrap: wrap; }
+.term-hero-value, .term-hero-value-sm {
+  display: inline-block;
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 2px dotted rgba(255, 255, 255, 0.6);
+  transition: opacity 0.1s var(--ease);
+}
+.term-hero-value:hover, .term-hero-value-sm:hover { opacity: 0.8; }
 .term-hero-value { font-family: var(--font-pixel); font-size: 34px; line-height: 1.3; }
 .term-hero-caption { font-size: 12.5px; opacity: 0.9; margin-top: 6px; max-width: 220px; }
 .term-hero-value-sm { font-family: var(--font-pixel); font-size: 19px; opacity: 0.95; }
 .term-hero-stat-sm .term-hero-caption { max-width: 180px; }
+.term-hero-hint { font-size: 11px; opacity: 0.75; margin-top: 18px; }
+.term-hero-hint::before { content: "> "; }
 
 .home-grid {
   display: grid;
@@ -328,7 +356,10 @@ a:hover { color: var(--accent-hover); }
   margin: 0 0 14px;
 }
 .home-card h2::before { content: "$ "; color: var(--accent); }
-.arg-day-date { font-size: 16px; font-weight: 700; margin-bottom: 10px; }
+.home-card.teal-card { border-color: var(--teal); }
+.home-card.teal-card h2 { color: var(--teal); }
+.home-card.teal-card h2::before { color: var(--teal); }
+.arg-day-date { font-size: 16px; font-weight: 700; margin-bottom: 10px; color: var(--teal); }
 .arg-day-cases { list-style: none; margin: 0; padding: 0; }
 .arg-day-cases li {
   font-size: 13px;
@@ -421,6 +452,34 @@ a:hover { color: var(--accent-hover); }
   animation: pulse 1.1s steps(2, end) infinite;
 }
 
+/* ---------- Questions Presented page ---------- */
+.qp-header { margin-bottom: 20px; }
+.qp-header h1 { font-size: 21px; margin: 0 0 6px; }
+.qp-header h1::before { content: "$ "; color: var(--teal); }
+.qp-subtitle { font-size: 13px; color: var(--text-muted); }
+
+.qp-list { display: flex; flex-direction: column; gap: 12px; }
+.qp-card {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-left: 5px solid var(--teal);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-sm);
+}
+.qp-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.qp-docket { font-size: 12px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.qp-status { font-size: 11px; color: var(--teal); font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; }
+.qp-card h3 { font-size: 15.5px; margin: 0 0 8px; }
+.qp-card p { font-size: 13.5px; line-height: 1.65; margin: 0; }
+.qp-meta { font-size: 12px; color: var(--text-faint); margin-top: 8px; }
+
 /* ---------- Tabs ---------- */
 .tabs {
   display: flex;
@@ -455,6 +514,38 @@ a:hover { color: var(--accent-hover); }
   bottom: -2px;
   height: 3px;
   background: var(--accent);
+}
+
+/* Recent / This Term / Past Terms -- partitions the dashboard's "quick
+   reference" default from its "look back further" views. Recent is
+   visually the lightest-weight (just text); Past Terms is the most
+   muted, since looking back is functional but not what the UI should
+   emphasize. */
+.scope-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.scope-tab {
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 6px 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background-color 0.1s var(--ease), color 0.1s var(--ease), transform 0.1s var(--ease);
+}
+.scope-tab:hover { color: var(--text); }
+.scope-tab:active { transform: translate(2px, 2px); box-shadow: none; }
+.scope-tab.active {
+  background: var(--navy);
+  color: var(--surface);
+  border-color: var(--border);
 }
 
 /* ---------- Toolbar ---------- */
@@ -548,7 +639,7 @@ a:hover { color: var(--accent-hover); }
 .badge::before { content: "["; }
 .badge::after { content: "]"; }
 .badge-notable { background: var(--notable-bg); color: var(--notable); border-color: var(--notable); }
-.badge-revision { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.badge-revision { background: var(--gold-soft); color: var(--gold); border-color: var(--gold); }
 
 /* ---------- Skeleton loading ---------- */
 .skeleton-card {

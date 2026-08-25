@@ -37,12 +37,26 @@ presents everything in a searchable, filterable web dashboard.
     per case, which is far more reliable.
   - The next upcoming oral argument day, with case names and docket
     numbers, parsed from the Court's monthly **Argument Calendar** PDFs.
+  - The **question(s) presented** for every case in a term's Granted &
+    Noted List, fetched from the Court's per-docket "Questions Presented"
+    PDF (`app/qp_scraper.py`) at a URL built directly from the docket
+    number -- no per-case page scraping needed. Reachable by clicking the
+    granted-case count on the home page.
   - Refreshed independently of opinions/orders, at most every
     `SCOTUS_TERM_DATA_REFRESH_HOURS` (default 12), since this changes far
     less often.
+- **Partitions "quick reference" from "look back further"**: Opinions
+  default to a **Recent** view (last `SCOTUS_RECENT_OPINION_DAYS` days,
+  default 30), with **This Term** and **Past Terms** one click away.
+  Orders default to the **current term only** -- old order lists don't
+  gain new entries once a term ends, so they'd otherwise just be noise --
+  with older terms reachable via the term dropdown. The point: the
+  dashboard's job is "what did the Court just do," not an archive browser,
+  though the archive is fully there when you want it.
 - **Serves** a REST API (`app/api/routes.py`) and a dashboard (`static/`)
   with real client-side routing (Home / Opinions / Orders / a full detail
-  page per case, each a real URL — not a popup), search/filter/sort, a
+  page per case / Questions Presented, each a real URL — not a popup),
+  search/filter/sort, a
   "Refresh now" button, and an in-process scheduler that re-fetches
   periodically.
 
@@ -78,6 +92,8 @@ All settings are environment variables with defaults (see
 | `ANTHROPIC_MODEL` | `claude-sonnet-5` | Model used for summaries |
 | `SCOTUS_REQUEST_DELAY_SECONDS` | `1.0` | Delay between requests to the Court's site |
 | `SCOTUS_TERM_DATA_REFRESH_HOURS` | `12` | How often to re-fetch the current-term label, Granted & Noted List, and argument calendars |
+| `SCOTUS_QP_FETCH_LIMIT` | `20` | Max Questions Presented PDFs fetched per term, per refresh cycle |
+| `SCOTUS_RECENT_OPINION_DAYS` | `30` | How many days back the Opinions "Recent" view covers |
 
 A single fetch caps how many new PDFs it processes per run (25 by default,
 see `document_limit` in `app/ingest.py`) so it stays fast; any backlog
@@ -97,8 +113,11 @@ python scripts/fetch_now.py --terms 25,24 --limit 50
 - `GET /api/stats` — counts, latest activity, last fetch run, tracked terms
 - `GET /api/term-summary` — current/next term labels and granted-case counts
 - `GET /api/argument-calendar?days=` — next N upcoming argument days with cases
-- `GET /api/opinions?term=&justice=&q=&has_dissent=&sort=&limit=&offset=` — list opinions
-  (`sort` is one of `date_desc`, `date_asc`, `author`, `docket`)
+- `GET /api/questions-presented?term=` — every QP fetched so far for a term
+- `GET /api/opinions?term=&scope=&justice=&q=&has_dissent=&sort=&limit=&offset=` — list opinions
+  (`sort` is one of `date_desc`, `date_asc`, `author`, `docket`; `scope` is
+  `recent` (last `SCOTUS_RECENT_OPINION_DAYS` days), `term` (current term),
+  or omitted for no date/term restriction beyond an explicit `term=`)
 - `GET /api/opinions/{id}` — full opinion detail including extracted text
 - `POST /api/opinions/{id}/summarize` — generate this opinion's summary now (idempotent)
 - `GET /api/orders?term=&order_type=&notable=&q=&limit=&offset=` — list orders
@@ -117,11 +136,13 @@ direct link or a page refresh on any of those URLs works correctly.
 app/
   scraper.py        # HTML parsing of the opinions/orders listing pages
   term_scraper.py    # Current-term label, Granted & Noted List, argument calendars
+  qp_scraper.py       # Questions Presented PDFs (URL built from docket number)
   pdf_extract.py     # PDF download + text extraction
   summarizer.py       # Boilerplate stripping, syllabus extraction, summarization
   ingest.py           # Orchestrates scrape -> store -> extract -> summarize
   term_ingest.py      # Orchestrates term-level data refresh + caching
-  models.py           # SQLAlchemy models (Opinion, Order, FetchRun, TermSummary, ArgumentEntry)
+  models.py           # SQLAlchemy models (Opinion, Order, FetchRun, TermSummary,
+                       #   ArgumentEntry, QuestionPresented)
   scheduler.py        # Background periodic fetch
   api/routes.py       # REST API
   main.py             # FastAPI app entrypoint + SPA-fallback routing

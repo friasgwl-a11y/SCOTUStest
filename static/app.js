@@ -62,22 +62,20 @@ function applyTheme(theme) {
   }
 }
 
-function systemPrefersDark() {
-  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-}
-
 function initTheme() {
+  // Dark is opt-in only: light is the enforced default regardless of the
+  // visitor's system preference, so "saved" is the only source of truth
+  // for whether dark mode is active -- no system-preference fallback.
   let saved = null;
   try {
     saved = localStorage.getItem("scotus-theme");
   } catch (e) {
-    /* private browsing / storage blocked: fall back to system preference */
+    /* private browsing / storage blocked: theme just won't persist */
   }
   applyTheme(saved);
 
   el("themeToggle").addEventListener("click", () => {
-    const isDark = document.documentElement.getAttribute("data-theme") === "dark"
-      || (!document.documentElement.getAttribute("data-theme") && systemPrefersDark());
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
     const next = isDark ? "light" : "dark";
     applyTheme(next);
     try {
@@ -99,6 +97,8 @@ function parseRoute(pathname) {
   if (m) return { view: "detail", type: "opinion", id: m[1] };
   m = path.match(/^\/order\/(\d+)$/);
   if (m) return { view: "detail", type: "order", id: m[1] };
+  m = path.match(/^\/questions-presented\/(\w+)$/);
+  if (m) return { view: "qp", term: m[1] };
   return { view: "notfound" };
 }
 
@@ -128,17 +128,31 @@ function setActiveNav(view) {
 // ----------------------------------------------------------- list state --
 
 const listState = {
-  opinion: { page: 0, pageSize: 20, total: 0, search: "", term: "", justice: "", sort: "date_desc", hasDissent: false },
-  order: { page: 0, pageSize: 20, total: 0, search: "", term: "", orderType: "", notableOnly: false },
+  // timeScope partitions the "quick reference" default (recent) from the
+  // "look back further" views (this term / past terms), per the
+  // dashboard's actual purpose: glance at what the Court just did,
+  // without that being buried by everything it's ever done.
+  opinion: { page: 0, pageSize: 20, total: 0, search: "", term: "", justice: "", sort: "date_desc", hasDissent: false, timeScope: "recent" },
+  // Orders default to the current term only -- old orders remain fully
+  // reachable via the term dropdown, they just aren't mixed in by
+  // default the way opinions briefly were.
+  order: { page: 0, pageSize: 20, total: 0, search: "", term: "", orderType: "", notableOnly: false, termInitialized: false },
 };
 listState.type = "opinion"; // which list the current view is showing
 
 let statsCache = null;
+let termSummaryCache = null;
 
 async function loadStats(force) {
   if (statsCache && !force) return statsCache;
   statsCache = await api("/api/stats");
   return statsCache;
+}
+
+async function loadTermSummary(force) {
+  if (termSummaryCache && !force) return termSummaryCache;
+  termSummaryCache = await api("/api/term-summary");
+  return termSummaryCache;
 }
 
 function updateChrome(stats) {
@@ -190,19 +204,22 @@ async function renderHome(app) {
       <div class="term-hero-label">${current ? escapeHtml(current.label) : "Current Term"}${current ? "" : " — unavailable"}</div>
       <div class="term-hero-grid">
         <div class="term-hero-stat">
-          <div class="term-hero-value">${current ? current.total_granted : "–"}</div>
+          ${current ? `
+          <a class="term-hero-value" href="/questions-presented/${current.term}" data-link title="See the questions presented for ${escapeHtml(current.label)}">${current.total_granted}</a>
+          ` : `<div class="term-hero-value">&ndash;</div>`}
           <div class="term-hero-caption">cases granted &amp; noted this term</div>
         </div>
         ${next ? `
         <div class="term-hero-stat term-hero-stat-sm">
-          <div class="term-hero-value-sm">${next.total_granted}</div>
+          <a class="term-hero-value-sm" href="/questions-presented/${next.term}" data-link title="See the questions presented for ${escapeHtml(next.label)}">${next.total_granted}</a>
           <div class="term-hero-caption">granted so far for ${escapeHtml(next.label)}</div>
         </div>` : ""}
       </div>
+      <div class="term-hero-hint">Click a number to see its questions presented &rarr;</div>
     </section>
 
     <div class="home-grid">
-      <section class="home-card">
+      <section class="home-card teal-card">
         <h2>Next Argument Day</h2>
         ${upcoming ? `
           <div class="arg-day-date">${fmtDateLong(upcoming.date)}</div>
@@ -246,6 +263,50 @@ function titleCase(s) {
   return s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
 }
 
+// ---------------------------------------------------- questions presented
+
+async function renderQuestionsPresented(app, term) {
+  app.innerHTML = `<a class="back-link" href="/" data-link>&larr; Back to Home</a>` + skeletonCards(4);
+
+  let data;
+  try {
+    data = await api(`/api/questions-presented?term=${encodeURIComponent(term)}`);
+  } catch (err) {
+    app.innerHTML = `
+      <a class="back-link" href="/" data-link>&larr; Back to Home</a>
+      <div class="empty-state">Couldn't load questions presented (${escapeHtml(err.message)}).</div>`;
+    return;
+  }
+
+  const label = data.label || otLabel(term);
+  const totalGranted = data.total_granted;
+
+  app.innerHTML = `
+    <a class="back-link" href="/" data-link>&larr; Back to Home</a>
+    <div class="qp-header">
+      <h1>Questions Presented</h1>
+      <div class="qp-subtitle">${escapeHtml(label)}${totalGranted != null ? ` &middot; ${totalGranted} cases granted &amp; noted` : ""}</div>
+    </div>
+    ${!data.items.length ? `
+      <div class="empty-state">No questions presented fetched yet for this term &mdash; they fill in gradually after each refresh. Check back shortly.</div>
+    ` : `
+      <div class="qp-list">
+        ${data.items.map((item) => `
+          <article class="qp-card">
+            <div class="qp-card-top">
+              <span class="qp-docket">No. ${escapeHtml(item.docket)}</span>
+              ${item.status_line ? `<span class="qp-status">${escapeHtml(item.status_line)}</span>` : ""}
+            </div>
+            <h3>${escapeHtml(titleCase(item.case_name || "Untitled case"))}</h3>
+            <p>${escapeHtml(item.question_presented || "")}</p>
+            ${item.decision_below ? `<div class="qp-meta">Decision below: ${escapeHtml(item.decision_below)}</div>` : ""}
+          </article>
+        `).join("")}
+      </div>
+    `}
+  `;
+}
+
 // -------------------------------------------------------------- list view
 
 function buildQuery(type) {
@@ -254,11 +315,18 @@ function buildQuery(type) {
   params.set("limit", s.pageSize);
   params.set("offset", s.page * s.pageSize);
   if (s.search) params.set("q", s.search);
-  if (s.term) params.set("term", s.term);
   if (type === "order") {
+    if (s.term) params.set("term", s.term);
     if (s.orderType) params.set("order_type", s.orderType);
     if (s.notableOnly) params.set("notable", "true");
   } else {
+    // "recent"/"term" scopes are enforced server-side (so pagination
+    // counts stay correct); "past" hands off to the ordinary term filter.
+    if (s.timeScope === "past") {
+      if (s.term) params.set("term", s.term);
+    } else {
+      params.set("scope", s.timeScope);
+    }
     if (s.justice) params.set("justice", s.justice);
     if (s.sort) params.set("sort", s.sort);
     if (s.hasDissent) params.set("has_dissent", "true");
@@ -306,12 +374,25 @@ function orderCard(o, index) {
 async function renderList(app, type) {
   listState.type = type;
   const s = listState[type];
-  const stats = await loadStats();
+  const [stats, termSummary] = await Promise.all([loadStats(), loadTermSummary()]);
   updateChrome(stats);
 
+  const currentTerm = termSummary.current_term ? termSummary.current_term.term : null;
   const terms = stats.tracked_terms || [];
+
+  if (type === "order" && !s.termInitialized) {
+    // Orders default to the current term only -- old order lists don't
+    // gain new entries once a term ends, so mixing them into the default
+    // view would just be noise. Older terms stay one dropdown away.
+    s.term = currentTerm || "";
+    s.termInitialized = true;
+  }
+
   const termOptions = '<option value="">All terms</option>' +
     terms.map((t) => `<option value="${t}" ${s.term === t ? "selected" : ""}>${otLabel(t)}</option>`).join("");
+  const pastTermOptions = '<option value="">Choose a term&hellip;</option>' +
+    terms.filter((t) => t !== currentTerm)
+      .map((t) => `<option value="${t}" ${s.term === t ? "selected" : ""}>${otLabel(t)}</option>`).join("");
 
   app.innerHTML = `
     <nav class="tabs" role="tablist">
@@ -319,10 +400,18 @@ async function renderList(app, type) {
       <a class="tab ${type === "order" ? "active" : ""}" data-link href="/orders" role="tab">Orders</a>
     </nav>
 
+    ${type === "opinion" ? `
+    <div class="scope-tabs" role="tablist" aria-label="Time range">
+      <button class="scope-tab ${s.timeScope === "recent" ? "active" : ""}" data-scope="recent">Recent</button>
+      <button class="scope-tab ${s.timeScope === "term" ? "active" : ""}" data-scope="term">This Term</button>
+      <button class="scope-tab ${s.timeScope === "past" ? "active" : ""}" data-scope="past">Past Terms</button>
+    </div>
+    ` : ""}
+
     <section class="toolbar">
       <input id="searchInput" type="search" placeholder="Search case name, docket, holding&hellip;" value="${escapeHtml(s.search)}" />
-      <select id="termFilter">${termOptions}</select>
       ${type === "order" ? `
+        <select id="termFilter">${termOptions}</select>
         <select id="typeFilter">
           <option value="">All order types</option>
           <option value="Order List" ${s.orderType === "Order List" ? "selected" : ""}>Order List</option>
@@ -330,6 +419,7 @@ async function renderList(app, type) {
         </select>
         <label class="notable-toggle"><input type="checkbox" id="notableOnly" ${s.notableOnly ? "checked" : ""} /> Notable only</label>
       ` : `
+        ${s.timeScope === "past" ? `<select id="termFilter">${pastTermOptions}</select>` : ""}
         <select id="justiceFilter">
           <option value="">All authors</option>
           ${(stats.justices || []).map((j) => `<option value="${j}" ${s.justice === j ? "selected" : ""}>${j}</option>`).join("")}
@@ -403,11 +493,25 @@ function wireListControls(type) {
     }, 300);
   });
 
-  el("termFilter").addEventListener("change", (e) => {
-    s.term = e.target.value;
-    s.page = 0;
-    loadListItems(type);
-  });
+  // Present for orders always, but for opinions only in "Past Terms" scope.
+  const termFilterEl = document.getElementById("termFilter");
+  if (termFilterEl) {
+    termFilterEl.addEventListener("change", (e) => {
+      s.term = e.target.value;
+      s.page = 0;
+      loadListItems(type);
+    });
+  }
+
+  if (type === "opinion") {
+    document.querySelectorAll(".scope-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        s.timeScope = btn.dataset.scope;
+        s.page = 0;
+        renderList(el("app"), "opinion");
+      });
+    });
+  }
 
   if (type === "order") {
     el("typeFilter").addEventListener("change", (e) => {
@@ -561,6 +665,8 @@ async function render() {
     await renderList(app, route.type);
   } else if (route.view === "detail") {
     await renderDetail(app, route.type, route.id);
+  } else if (route.view === "qp") {
+    await renderQuestionsPresented(app, route.term);
   } else {
     app.innerHTML = `<div class="empty-state">Page not found. <a href="/" data-link>Go home</a>.</div>`;
   }

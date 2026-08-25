@@ -13,9 +13,10 @@ import re
 
 from sqlalchemy import select
 
-from app.config import TERM_DATA_REFRESH_HOURS
+from app.config import QP_FETCH_LIMIT, TERM_DATA_REFRESH_HOURS
 from app.db import session_scope
-from app.models import ArgumentEntry, Opinion, TermSummary
+from app.models import ArgumentEntry, Opinion, QuestionPresented, TermSummary
+from app.qp_scraper import fetch_qp
 from app.term_scraper import (
     fetch_and_parse_argument_calendars,
     fetch_granted_noted_list,
@@ -53,7 +54,7 @@ def _is_stale(term: str) -> bool:
         return age.total_seconds() > TERM_DATA_REFRESH_HOURS * 3600
 
 
-def _refresh_granted_list(term: str, label: str, is_current: bool) -> None:
+def _refresh_granted_list(term: str, label: str, is_current: bool) -> list | None:
     try:
         cases = fetch_granted_noted_list(term)
     except Exception as exc:
@@ -70,7 +71,7 @@ def _refresh_granted_list(term: str, label: str, is_current: bool) -> None:
                     source_error=str(exc)[:500],
                 )
             )
-        return
+        return None
 
     with session_scope() as session:
         session.merge(
@@ -96,6 +97,42 @@ def _refresh_granted_list(term: str, label: str, is_current: bool) -> None:
             opinion.separate_opinions = case.other
             opinion.disposition = case.result
             opinion.has_dissent = _has_dissent(case.other)
+
+    return cases
+
+
+def _refresh_questions_presented(term: str, cases: list, limit: int = QP_FETCH_LIMIT) -> None:
+    """Fetches the Questions Presented PDF for cases in this term that
+    don't have one stored yet, capped at `limit` per call -- a term can
+    have 60+ granted cases, and each QP rarely if ever changes once set,
+    so there's no reason to re-fetch ones already on file."""
+    with session_scope() as session:
+        known_dockets = set(
+            session.execute(
+                select(QuestionPresented.docket).where(QuestionPresented.term == term)
+            ).scalars()
+        )
+
+    pending = [c for c in cases if c.docket not in known_dockets][:limit]
+    for case in pending:
+        record = fetch_qp(case.docket)
+        with session_scope() as session:
+            if record is None:
+                session.add(
+                    QuestionPresented(term=term, docket=case.docket, not_available=True)
+                )
+            else:
+                session.add(
+                    QuestionPresented(
+                        term=term,
+                        docket=case.docket,
+                        case_name=record.case_name or case.case_name,
+                        decision_below=record.decision_below,
+                        lower_court_case_number=record.lower_court_case_number,
+                        question_presented=record.question_presented,
+                        status_line=record.status_line,
+                    )
+                )
 
 
 def _refresh_argument_calendar(term: str) -> None:
@@ -146,8 +183,23 @@ def refresh_term_data(force: bool = False) -> None:
         if not force and not _is_stale(term):
             continue
         label = labels.get(term, f"October Term {2000 + int(term)}")
-        _refresh_granted_list(term, label, is_current)
+        cases = _refresh_granted_list(term, label, is_current)
         _refresh_argument_calendar(term)
+        if cases:
+            _refresh_questions_presented(term, cases)
+
+
+def get_questions_presented(term: str) -> list[dict]:
+    """All QPs fetched so far for a term, ordered by docket. Cases whose QP
+    hasn't been fetched yet (see QP_FETCH_LIMIT) simply won't appear until
+    a later refresh catches up."""
+    with session_scope() as session:
+        rows = session.execute(
+            select(QuestionPresented)
+            .where(QuestionPresented.term == term, QuestionPresented.not_available.is_(False))
+            .order_by(QuestionPresented.docket)
+        ).scalars().all()
+        return [r.to_dict() for r in rows]
 
 
 def get_next_argument_days(limit_days: int = 1) -> list[dict]:

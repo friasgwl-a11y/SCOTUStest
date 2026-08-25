@@ -188,3 +188,37 @@ class ArgumentEntry(Base):
             "docket": self.docket,
             "case_name": self.case_name,
         }
+
+
+class QuestionPresented(Base):
+    """The legal question(s) the Court agreed to decide for one granted or
+    noted case, scraped from the Court's own per-docket "Questions
+    Presented" PDF (a stable URL built from the docket number, not a
+    document listed in the Granted & Noted List itself)."""
+
+    __tablename__ = "questions_presented"
+    __table_args__ = (
+        UniqueConstraint("term", "docket", name="uq_question_presented"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    term: Mapped[str] = mapped_column(String(8), index=True)
+    docket: Mapped[str] = mapped_column(String(64))
+    case_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    decision_below: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    lower_court_case_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    question_presented: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status_line: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    not_available: Mapped[bool] = mapped_column(default=False)
+    fetched_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "term": self.term,
+            "docket": self.docket,
+            "case_name": self.case_name,
+            "decision_below": self.decision_below,
+            "lower_court_case_number": self.lower_court_case_number,
+            "question_presented": self.question_presented,
+            "status_line": self.status_line,
+        }

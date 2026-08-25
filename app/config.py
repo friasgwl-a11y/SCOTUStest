@@ -34,6 +34,17 @@ FETCH_ON_STARTUP = os.getenv("SCOTUS_FETCH_ON_STARTUP", "true").lower() != "fals
 # and re-fetched only when stale.
 TERM_DATA_REFRESH_HOURS = float(os.getenv("SCOTUS_TERM_DATA_REFRESH_HOURS", "12"))
 
+# Max "Questions Presented" PDFs fetched per term, per refresh cycle. Each
+# is a single small page, but there can be 60+ granted cases in a term, so
+# this is bounded the same way document processing is -- any backlog
+# drains over subsequent refreshes rather than fetching everything at once.
+QP_FETCH_LIMIT = int(os.getenv("SCOTUS_QP_FETCH_LIMIT", "20"))
+
+# How many days back "Recent" opinions cover on the dashboard (the
+# opinions list defaults to this scope; "This Term" and "Past Terms" give
+# the wider views).
+RECENT_OPINION_DAYS = int(os.getenv("SCOTUS_RECENT_OPINION_DAYS", "30"))
+
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 

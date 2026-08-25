@@ -6,11 +6,11 @@ import threading
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, or_, select
 
-from app.config import TERMS
+from app.config import RECENT_OPINION_DAYS, TERMS
 from app.db import session_scope
 from app.ingest import process_document, run_fetch
 from app.models import FetchRun, Opinion, Order, TermSummary
-from app.term_ingest import get_next_argument_days
+from app.term_ingest import get_next_argument_days, get_questions_presented
 
 router = APIRouter(prefix="/api")
 
@@ -103,6 +103,7 @@ _OPINION_SORTS = {
 @router.get("/opinions")
 def list_opinions(
     term: str | None = None,
+    scope: str | None = Query(None, pattern="^(recent|term|all)$"),
     justice: str | None = None,
     q: str | None = None,
     has_dissent: bool | None = None,
@@ -110,8 +111,24 @@ def list_opinions(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
+    """`scope` partitions the dashboard's default "quick reference" view
+    from its "look back further" views: "recent" (the default a fresh
+    visitor should land on) restricts to the last RECENT_OPINION_DAYS
+    days; "term" restricts to the current term regardless of date; "all"
+    (or omitting scope, with an explicit `term` filter instead) applies no
+    date/term restriction of its own.
+    """
     with session_scope() as session:
         stmt = select(Opinion)
+        if scope == "recent":
+            since = dt.date.today() - dt.timedelta(days=RECENT_OPINION_DAYS)
+            stmt = stmt.where(Opinion.date >= since)
+        elif scope == "term":
+            current = session.execute(
+                select(TermSummary.term).where(TermSummary.is_current.is_(True))
+            ).scalar_one_or_none()
+            if current:
+                stmt = stmt.where(Opinion.term == current)
         if term:
             stmt = stmt.where(Opinion.term == term)
         if justice:
@@ -160,6 +177,20 @@ def term_summary():
 @router.get("/argument-calendar")
 def argument_calendar(days: int = Query(1, ge=1, le=30)):
     return {"upcoming": get_next_argument_days(limit_days=days)}
+
+
+@router.get("/questions-presented")
+def questions_presented(term: str):
+    with session_scope() as session:
+        summary = session.get(TermSummary, term)
+        label = summary.label if summary else None
+        total_granted = summary.total_granted if summary else None
+    return {
+        "term": term,
+        "label": label,
+        "total_granted": total_granted,
+        "items": get_questions_presented(term),
+    }
 
 
 @router.get("/opinions/{opinion_id}")
