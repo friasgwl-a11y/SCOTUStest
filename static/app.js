@@ -108,9 +108,11 @@ function opinionCard(o) {
   const badges = [];
   if (o.is_revision) badges.push('<span class="badge badge-revision">Revised</span>');
   if (o.extraction_error) badges.push('<span class="badge">Text unavailable</span>');
-  else if (!o.has_full_text) badges.push('<span class="badge">Processing…</span>');
 
-  const snippet = o.summary || o.holding || "";
+  // The Court's own holding comes free from the listing page, so an
+  // unsummarized opinion still reads well; the AI summary is the upgrade
+  // you get on opening it.
+  const snippet = o.summary || o.holding || "Open to generate a summary.";
   return `
     <article class="item-card" data-type="opinion" data-id="${o.id}">
       <div class="item-top">
@@ -126,9 +128,8 @@ function orderCard(o) {
   const badges = [`<span class="badge">${escapeHtml(o.order_type)}</span>`];
   if (o.notable) badges.push('<span class="badge badge-notable">Notable</span>');
   if (o.extraction_error) badges.push('<span class="badge">Text unavailable</span>');
-  else if (!o.has_full_text) badges.push('<span class="badge">Processing…</span>');
 
-  const snippet = o.summary || "";
+  const snippet = o.summary || "Open to generate a summary.";
   return `
     <article class="item-card" data-type="order" data-id="${o.id}">
       <div class="item-top">
@@ -173,7 +174,23 @@ async function openDetail(type, id) {
   overlay.classList.remove("hidden");
   content.innerHTML = '<div class="empty-state">Loading…</div>';
 
-  const data = await api(`/api/${type === "order" ? "orders" : "opinions"}/${id}`);
+  const base = `/api/${type === "order" ? "orders" : "opinions"}/${id}`;
+  let data = await api(base);
+
+  // Summaries are generated lazily to keep memory use low, so the first
+  // time anyone opens an older document we produce it now.
+  if (!data.summary && !data.extraction_error) {
+    render(data, true);
+    try {
+      const res = await fetch(`${base}/summarize`, { method: "POST" });
+      if (res.ok) data = await res.json();
+    } catch (err) {
+      /* fall through and render whatever we have */
+    }
+  }
+  render(data, false);
+
+  function render(data, generating) {
   if (type === "opinion") {
     content.innerHTML = `
       <div class="detail-content">
@@ -185,7 +202,7 @@ async function openDetail(type, id) {
         </div>
         ${data.holding ? `<h3>Holding (Court syllabus)</h3><p>${escapeHtml(data.holding)}</p>` : ""}
         <h3>Summary</h3>
-        <p>${data.summary ? escapeHtml(data.summary) : (data.extraction_error ? "Could not extract text from this PDF." : "Not yet processed.")}</p>
+        <p>${summaryText(data, generating)}</p>
         <a class="pdf-link" href="${data.pdf_url}" target="_blank" rel="noopener">Read full opinion (PDF) &rarr;</a>
       </div>`;
   } else {
@@ -194,10 +211,20 @@ async function openDetail(type, id) {
         <h2>${escapeHtml(data.order_type)}</h2>
         <div class="detail-meta">${fmtDate(data.date)}${data.notable ? " &middot; Flagged notable" : ""}</div>
         <h3>Summary</h3>
-        <p>${data.summary ? escapeHtml(data.summary) : (data.extraction_error ? "Could not extract text from this PDF." : "Not yet processed.")}</p>
+        <p>${summaryText(data, generating)}</p>
         <a class="pdf-link" href="${data.pdf_url}" target="_blank" rel="noopener">Read full order (PDF) &rarr;</a>
       </div>`;
   }
+  }
+}
+
+function summaryText(data, generating) {
+  if (data.summary) return escapeHtml(data.summary);
+  if (generating) return '<span class="generating">Generating summary from the PDF…</span>';
+  if (data.extraction_error) {
+    return "Could not read this PDF. Use the link below to open the official document.";
+  }
+  return "No summary available yet.";
 }
 
 function closeDetail() {

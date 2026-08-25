@@ -4,9 +4,21 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # One worker: peak memory is dominated by PDF processing, and a second
+    # worker would double it without helping on a free instance.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     envVars:
       - key: SCOTUS_FETCH_ON_STARTUP
         value: "true"
       - key: SCOTUS_TERMS
         value: "25,24"
+      # Summarize only documents released in the last day in the
+      # background; everything older is summarized on demand when opened.
+      - key: SCOTUS_AUTO_PROCESS_DAYS
+        value: "1"
+      - key: SCOTUS_DOCUMENT_LIMIT
+        value: "4"
+      - key: SCOTUS_MAX_PDF_PAGES
+        value: "20"
+      - key: PYTHONMALLOC
+        value: "malloc"

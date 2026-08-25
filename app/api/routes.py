@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select
 
 from app.config import TERMS
 from app.db import session_scope
-from app.ingest import run_fetch
+from app.ingest import process_document, run_fetch
 from app.models import FetchRun, Opinion, Order
 
 router = APIRouter(prefix="/api")
@@ -176,6 +176,29 @@ def get_order(order_id: int):
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         return order.to_dict(include_full_text=True)
+
+
+@router.post("/opinions/{opinion_id}/summarize")
+def summarize_opinion(opinion_id: int):
+    """Generates this opinion's text + summary on demand.
+
+    Summaries are produced lazily -- only recently released documents are
+    processed in the background -- so this is what fills one in the first
+    time someone opens an older case. Returns immediately if it is already
+    processed.
+    """
+    result = process_document("opinion", opinion_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Opinion not found")
+    return result
+
+
+@router.post("/orders/{order_id}/summarize")
+def summarize_order(order_id: int):
+    result = process_document("order", order_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return result
 
 
 @router.get("/fetch-runs")

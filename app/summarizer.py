@@ -63,8 +63,29 @@ _BOILERPLATE_PATTERNS = [
 ]
 
 
+def _normalize_lines(text: str) -> str:
+    """Strips per-line padding and leading page numbers.
+
+    Different PDF text extractors lay the same page out differently --
+    pypdf emits trailing spaces and prefixes the running header with the
+    page number ("1  Cite as: 609 U. S. ____ (2026) "), where pdfplumber
+    does not. The boilerplate patterns below are line-anchored, so
+    normalizing first keeps them working regardless of which extractor
+    produced the text.
+    """
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Drop a bare page number preceding a running header.
+        line = re.sub(r"^\d{1,4}\s+(?=Cite as:|OCTOBER TERM)", "", line)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _clean_text(text: str) -> str:
-    cleaned = text
+    cleaned = _normalize_lines(text)
     for pattern in _BOILERPLATE_PATTERNS:
         cleaned = pattern.sub("", cleaned)
     # Rejoin words split by a line-wrap hyphen, e.g. "regard-\ning" -> "regarding".
@@ -159,6 +180,11 @@ def summarize_with_anthropic(text: str, case_label: str, doc_kind: str) -> str |
 
 
 _SYLLABUS_START_RE = re.compile(r"\bSyllabus\b")
+# The syllabus states the disposition after "Held:", which is the single
+# most useful sentence in the document. Starting there skips the case
+# caption ("SUPREME COURT OF THE UNITED STATES / Syllabus / X v. Y / ON
+# WRIT OF CERTIORARI...") that otherwise dominates the extracted summary.
+_HELD_RE = re.compile(r"\bHeld\s*:")
 _SYLLABUS_END_RE = re.compile(
     r"JUSTICE\s+[A-Z]+\s+delivered the opinion|Opinion of the Court|"
     r"PER CURIAM|delivered a? ?per curiam opinion",
@@ -174,8 +200,14 @@ def _extract_syllabus(text: str) -> str | None:
     if not start:
         return None
     end = _SYLLABUS_END_RE.search(text, start.end())
-    segment = text[start.end():end.start()] if end else text[start.end():start.end() + 8000]
-    segment = segment.strip()
+    stop = end.start() if end else min(len(text), start.end() + 8000)
+
+    # Prefer starting at "Held:" -- that is the disposition itself, and it
+    # skips the case caption that otherwise leads the extracted summary.
+    held = _HELD_RE.search(text, start.end(), stop)
+    begin = held.end() if held else start.end()
+
+    segment = text[begin:stop].strip()
     return segment if len(segment) > 200 else None
 
 

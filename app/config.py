@@ -36,4 +36,18 @@ MAX_SUMMARY_SENTENCES = int(os.getenv("SCOTUS_SUMMARY_SENTENCES", "5"))
 # How many PDFs to download+process per fetch run, per document type. Kept
 # small so a run finishes well within the resources of a small/free hosting
 # tier; the scheduler drains any backlog over subsequent runs.
-DOCUMENT_LIMIT = int(os.getenv("SCOTUS_DOCUMENT_LIMIT", "8"))
+DOCUMENT_LIMIT = int(os.getenv("SCOTUS_DOCUMENT_LIMIT", "4"))
+
+# Only documents released within this many days are summarized automatically
+# in the background. Everything older is summarized on demand, the first
+# time someone actually opens it. Set to 0 to disable background
+# summarization entirely (fully lazy).
+AUTO_PROCESS_DAYS = int(os.getenv("SCOTUS_AUTO_PROCESS_DAYS", "1"))
+
+# Pages read per PDF. Slip opinions put the syllabus and holding up front;
+# the tail is separate opinions and appendices, which cost memory without
+# improving the summary.
+MAX_PDF_PAGES = int(os.getenv("SCOTUS_MAX_PDF_PAGES", "20"))
+
+# Upper bound on extracted text kept per document.
+MAX_STORED_TEXT_CHARS = int(os.getenv("SCOTUS_MAX_STORED_TEXT_CHARS", "120000"))

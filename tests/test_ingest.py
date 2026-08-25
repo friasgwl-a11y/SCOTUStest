@@ -72,6 +72,7 @@ def test_total_document_failure_is_reported_as_error(db, monkeypatch):
         raise RuntimeError("403 Forbidden")
 
     monkeypatch.setattr(ingest, "fetch_and_extract", blocked)
+    monkeypatch.setattr(ingest, "AUTO_PROCESS_DAYS", 100000)
     result = ingest.run_fetch(terms=["25"], document_limit=2)
 
     assert result["status"] == "error"
@@ -92,6 +93,9 @@ def test_successful_documents_persist_despite_later_failures(db, monkeypatch):
         return ("Extracted opinion text that is long enough to summarize properly.", 3)
 
     monkeypatch.setattr(ingest, "fetch_and_extract", flaky)
+    # Widen the background window so this exercises multiple documents
+    # regardless of how old the fixture's dates are relative to today.
+    monkeypatch.setattr(ingest, "AUTO_PROCESS_DAYS", 100000)
     ingest.run_fetch(terms=["25"], document_limit=4)
 
     with db.session_scope() as session:
@@ -102,9 +106,88 @@ def test_successful_documents_persist_despite_later_failures(db, monkeypatch):
     assert errored >= 1
 
 
+def test_background_run_skips_older_documents(db, monkeypatch):
+    """Only recently released documents are summarized in the background.
+
+    This is what keeps memory bounded on a small instance: a fetch must
+    not walk the whole back catalogue downloading PDFs.
+    """
+    processed_urls = []
+
+    def record(url):
+        processed_urls.append(url)
+        return ("some extracted text for the summary", 2)
+
+    monkeypatch.setattr(ingest, "fetch_and_extract", record)
+    # Nothing in the fixtures is dated in the future, so a zero-day window
+    # means every document is "too old" to process in the background.
+    monkeypatch.setattr(ingest, "AUTO_PROCESS_DAYS", 0)
+    ingest.run_fetch(terms=["25"], document_limit=10)
+
+    assert processed_urls == []
+    # ...but the catalogue is still fully populated.
+    opinions, orders = _counts(db)
+    assert opinions == 76 and orders == 109
+
+
+def test_process_document_generates_summary_on_demand(db, monkeypatch):
+    """Opening an unsummarized document produces its summary."""
+    from app.models import Opinion
+
+    monkeypatch.setattr(ingest, "AUTO_PROCESS_DAYS", 0)
+    monkeypatch.setattr(
+        ingest, "fetch_and_extract",
+        lambda url: ("The Court holds that the statute is constitutional. "
+                     "The judgment below is affirmed in full.", 5),
+    )
+    ingest.run_fetch(terms=["25"], document_limit=10)
+
+    with db.session_scope() as session:
+        target = session.query(Opinion).filter(Opinion.full_text.is_(None)).first()
+        target_id = target.id
+        assert target.summary is None
+
+    result = ingest.process_document("opinion", target_id)
+
+    assert result["summary"]
+    assert result["page_count"] == 5
+    with db.session_scope() as session:
+        assert session.get(Opinion, target_id).full_text is not None
+
+
+def test_process_document_is_idempotent(db, monkeypatch):
+    """Re-opening a document doesn't re-download it."""
+    from app.models import Opinion
+
+    calls = {"n": 0}
+
+    def counting(url):
+        calls["n"] += 1
+        return ("Extracted text used to build the summary for this case.", 1)
+
+    monkeypatch.setattr(ingest, "AUTO_PROCESS_DAYS", 0)
+    monkeypatch.setattr(ingest, "fetch_and_extract", counting)
+    ingest.run_fetch(terms=["25"], document_limit=10)
+
+    with db.session_scope() as session:
+        target_id = session.query(Opinion).filter(Opinion.full_text.is_(None)).first().id
+
+    ingest.process_document("opinion", target_id)
+    ingest.process_document("opinion", target_id)
+    ingest.process_document("opinion", target_id)
+
+    assert calls["n"] == 1
+
+
+def test_process_document_missing_id_returns_none(db):
+    assert ingest.process_document("opinion", 999999) is None
+    assert ingest.process_document("order", 999999) is None
+
+
 def test_rerun_resumes_and_does_not_duplicate(db, monkeypatch):
     """A second run re-uses stored listings instead of duplicating them."""
     monkeypatch.setattr(ingest, "fetch_and_extract", lambda url: ("text body here for summary", 1))
+    monkeypatch.setattr(ingest, "AUTO_PROCESS_DAYS", 0)
 
     first = ingest.run_fetch(terms=["25"], document_limit=1)
     assert first["new_opinions"] == 76

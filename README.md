@@ -11,8 +11,9 @@ presents everything in a searchable, filterable web dashboard.
   orders (`/orders/ordersofthecourt/{term}`) listing pages for one or more
   terms. There is no JSON/RSS feed for this data, so the HTML is parsed
   directly (see `app/scraper.py` for the exact markup this relies on).
-- **Downloads and extracts** the text of every new opinion/order PDF
-  (`app/pdf_extract.py`, via `pdfplumber`).
+- **Downloads and extracts** PDF text (`app/pdf_extract.py`, via `pypdf`),
+  streaming each download to a temp file and reading only the first
+  `SCOTUS_MAX_PDF_PAGES` pages.
 - **Summarizes** each document (`app/summarizer.py`):
   - Opinions carry the Court's own one-line syllabus/holding (scraped from
     the case-name link's `title` attribute) for free.
@@ -101,6 +102,35 @@ static/            # Vanilla HTML/CSS/JS dashboard
 scripts/fetch_now.py  # CLI for a one-off fetch
 tests/             # Scraper + summarizer unit tests (fixtures = real HTML)
 ```
+
+## Memory behaviour (running on a small/free instance)
+
+Free hosting tiers typically cap a service at 512MB, and PDF parsing is by
+far the most memory-hungry thing here. The design keeps peak usage around
+**80MB** measured end-to-end (full scrape of both listing pages plus
+several summaries):
+
+- **`pypdf`, not `pdfplumber`.** Measured on the same 77-page slip
+  opinion, pdfplumber peaked at ~354MB and pypdf at ~39MB. pdfplumber's
+  layout/table analysis is what costs that; we only need plain text.
+- **Lazy summarization.** Only documents released within
+  `SCOTUS_AUTO_PROCESS_DAYS` (default 1) are summarized in the background.
+  Everything else is summarized the first time someone opens it, then
+  cached. Set `SCOTUS_AUTO_PROCESS_DAYS=0` for fully-on-demand.
+- **Opinions read well before summarizing.** The Court's own one-line
+  holding is scraped from the listing page, so the list is informative
+  with zero PDFs downloaded.
+- **Page cap.** Only the first `SCOTUS_MAX_PDF_PAGES` (default 20) pages
+  are read; a slip opinion's syllabus and holding are at the front.
+- **Downloads stream to a temp file**, so raw PDF bytes never sit in RAM.
+- **One document at a time.** A process-wide lock serializes extraction,
+  so concurrent visitors can't multiply peak memory.
+- **One web worker**, since a second would double the ceiling without
+  helping on a free instance.
+
+If you still hit the limit, the strongest knobs are
+`SCOTUS_AUTO_PROCESS_DAYS=0`, a lower `SCOTUS_MAX_PDF_PAGES`, and
+`SCOTUS_TERMS=25` (one term instead of two).
 
 ## Deploying so you can view it from a phone/browser anywhere
 

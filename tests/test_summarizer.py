@@ -35,9 +35,16 @@ NOTE: Where it is feasible, a syllabus (headnote) will be released.
 SUPREME COURT OF THE UNITED STATES
 Syllabus
 EXAMPLE v. TEST CASE
+CERTIORARI TO THE UNITED STATES COURT OF APPEALS FOR THE NINTH CIRCUIT
 No. 24-1. Argued January 1, 2026 - Decided June 1, 2026
-The Court holds that the statute means what it says. Held: the judgment
-below is reversed.
+Petitioner brought suit alleging the agency exceeded its authority. The
+District Court dismissed the complaint and the Court of Appeals affirmed.
+Held: The statute's plain text forecloses the agency's reading, and the
+judgment below is reversed and remanded for further proceedings. The
+ordinary meaning of the operative phrase controls, and nothing in the
+statutory structure displaces it. Pp. 4-17.
+(a) The text is unambiguous and the canons confirm it. Pp. 4-9.
+(b) The agency's contrary policy arguments belong to Congress. Pp. 10-17.
 Opinion of the Court
 JUSTICE EXAMPLE delivered the opinion of the Court.
 This case is about statutory interpretation and the plain meaning rule.
@@ -77,8 +84,17 @@ def test_summarize_extractive_empty_text():
 def test_extract_syllabus_finds_segment():
     syllabus = _extract_syllabus(SAMPLE_SYLLABUS_TEXT)
     assert syllabus is not None
-    assert "statutory interpretation" not in syllabus  # that's in the opinion body, after Syllabus ends
-    assert "judgment" in syllabus.lower() or "statute" in syllabus.lower()
+    # The opinion body starts after the syllabus ends and must be excluded.
+    assert "plain meaning rule" not in syllabus
+    assert "judgment below is reversed" in syllabus
+
+
+def test_extract_syllabus_starts_at_held_not_the_caption():
+    """The disposition should lead, not the case caption/docket line."""
+    syllabus = _extract_syllabus(SAMPLE_SYLLABUS_TEXT)
+    assert "CERTIORARI TO THE UNITED STATES COURT OF APPEALS" not in syllabus
+    assert "Argued January 1, 2026" not in syllabus
+    assert syllabus.lstrip().startswith("The statute's plain text forecloses")
 
 
 def test_extract_syllabus_returns_none_when_absent():
