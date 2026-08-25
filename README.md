@@ -102,6 +102,28 @@ scripts/fetch_now.py  # CLI for a one-off fetch
 tests/             # Scraper + summarizer unit tests (fixtures = real HTML)
 ```
 
+## Deploying so you can view it from a phone/browser anywhere
+
+This app needs a server; running it only on your own laptop means only
+that laptop can open it. The included `render.yaml` lets you deploy it to
+[Render](https://render.com) in a few clicks:
+
+1. Sign in at render.com (free account, GitHub login works).
+2. **New** -> **Blueprint**, pick this repo and the `claude/scotus-dashboard-gccq2j`
+   branch. Render reads `render.yaml` and configures the service automatically.
+3. Click **Apply** / **Create**. The first build takes a few minutes.
+4. Once it says "Live," open the `https://<something>.onrender.com` URL —
+   that link works from any device, including your phone.
+
+Notes:
+- Render's free tier spins the service down after inactivity; the first
+  request after a while will be slow while it wakes back up.
+- The free tier's disk is not persistent across deploys/restarts, so the
+  SQLite database (and everything fetched so far) resets when that
+  happens. For a demo this is fine — hit "Refresh now" and it repopulates
+  in a minute or two. For a permanent deployment, add a persistent disk
+  (paid plan) or point `SCOTUS_DATABASE_URL` at an external database.
+
 ## Testing
 
 ```bash

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: scotus-tracker
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SCOTUS_FETCH_ON_STARTUP
+        value: "true"
+      - key: SCOTUS_TERMS
+        value: "25,24"
