@@ -32,3 +32,8 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
 MAX_SUMMARY_SENTENCES = int(os.getenv("SCOTUS_SUMMARY_SENTENCES", "5"))
+
+# How many PDFs to download+process per fetch run, per document type. Kept
+# small so a run finishes well within the resources of a small/free hosting
+# tier; the scheduler drains any backlog over subsequent runs.
+DOCUMENT_LIMIT = int(os.getenv("SCOTUS_DOCUMENT_LIMIT", "8"))

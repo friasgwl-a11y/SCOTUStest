@@ -67,11 +67,19 @@ async function loadStats() {
     justices.map((j) => `<option value="${j}">${j}</option>`).join("");
   justiceSelect.value = currentJustice;
 
+  const banner = el("errorBanner");
   if (stats.last_fetch_run) {
     const run = stats.last_fetch_run;
     el("lastRun").textContent = `Last fetch: ${timeAgo(run.finished_at || run.started_at)} (${run.status}, +${run.new_opinions}/+${run.new_orders})`;
+    if (run.status === "error" && run.error) {
+      banner.textContent = `Last fetch reported an error: ${run.error}`;
+      banner.classList.remove("hidden");
+    } else {
+      banner.classList.add("hidden");
+    }
   } else {
     el("lastRun").textContent = "No fetch yet";
+    banner.classList.add("hidden");
   }
 
   el("refreshBtn").disabled = !!stats.refresh_running;
@@ -290,8 +298,10 @@ async function pollUntilIdle() {
 
 async function init() {
   wireEvents();
+  // setTab applies the per-tab filter visibility, so call it on load rather
+  // than waiting for the first click -- otherwise every filter shows at once.
+  setTab(state.tab);
   await loadStats();
-  await loadList();
   setInterval(loadStats, 30000);
 }
 

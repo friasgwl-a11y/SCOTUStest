@@ -133,6 +133,18 @@ a { color: var(--accent); }
 
 .hidden { display: none !important; }
 
+.error-banner {
+  background: var(--notable-bg);
+  color: var(--notable);
+  border: 1px solid currentColor;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
 .list { display: flex; flex-direction: column; gap: 10px; min-height: 200px; }
 .empty-state { text-align: center; color: var(--text-muted); padding: 40px 0; }
 
