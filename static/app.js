@@ -372,6 +372,36 @@ function voteChips(o) {
   return badges.join("");
 }
 
+// A small 9-pixel "bench" graphic: one square per seat on the Court,
+// colored by how that seat voted. Built only from what the workflow
+// already fetches (the majority author + the Granted & Noted List's
+// concurrence/dissent breakdown) -- there's no roster of sitting
+// Justices anywhere in this app to name the remaining seats, so any
+// seat not otherwise accounted for is shown as a plain "joined in full"
+// square rather than guessing who occupies it.
+const BENCH_SIZE = 9;
+
+function voteGraphic(o) {
+  const author = o.author_name || o.justice;
+  const votes = o.vote_breakdown || [];
+  const dissents = votes.filter((v) => v.has_dissent);
+  const concurs = votes.filter((v) => v.has_concurrence && !v.has_dissent);
+  if (!author && !dissents.length && !concurs.length) return "";
+
+  const seats = [];
+  if (author) seats.push({ kind: "author", label: `Wrote for the Court: ${author}` });
+  dissents.forEach((v) => seats.push({ kind: "dissent", label: `Dissent: ${v.author} (${v.label})` }));
+  concurs.forEach((v) => seats.push({ kind: "concur", label: `Concurrence: ${v.author} (${v.label})` }));
+  for (let i = seats.length; i < BENCH_SIZE; i++) {
+    seats.push({ kind: "joined", label: "Joined the majority in full" });
+  }
+
+  const pixels = seats
+    .map((s) => `<span class="vote-pixel vote-pixel-${s.kind}" title="${escapeHtml(s.label)}"></span>`)
+    .join("");
+  return `<div class="vote-graphic" aria-label="How the Justices voted">${pixels}</div>`;
+}
+
 function opinionCard(o, index) {
   const snippet = o.summary || o.holding || "Open to read the syllabus.";
   const delay = Math.min(index, 12) * 25;
@@ -382,6 +412,7 @@ function opinionCard(o, index) {
         <div class="item-meta">${fmtDate(o.date)} &middot; No. ${escapeHtml(o.docket || "–")}</div>
       </div>
       <div class="item-badges">${voteChips(o)}</div>
+      ${voteGraphic(o)}
       <div class="item-snippet">${escapeHtml(snippet).slice(0, 320)}${snippet.length > 320 ? "…" : ""}</div>
     </a>`;
 }
@@ -701,6 +732,7 @@ async function renderDetail(app, type, id) {
             ${data.citation ? " &middot; " + escapeHtml(data.citation) + " U.S." : ""}
           </div>
           <div class="detail-badges">${voteChips(data)}</div>
+          ${voteGraphic(data)}
           ${data.holding ? `<h3>Holding, at a glance</h3><p>${escapeHtml(data.holding)}</p>` : ""}
           <h3>${summaryHeading(data, generating)}</h3>
           ${data.summary ? renderSummaryPreview(data) : `<p>${summaryText(data, generating)}</p>`}

@@ -59,6 +59,14 @@ presents everything in a searchable, filterable web dashboard.
     doesn't carry -- matching the raw annotated form silently missed and
     left author/dissent metadata blank. Every tracked term is matched
     this way, not just the current and next one.
+  - Every opinion card and its detail page shows this as a **9-pixel
+    "bench" graphic** -- one square per seat on the Court, colored by
+    vote (author/concurrence/dissent/joined-in-full) -- built entirely
+    from the author + concurrence/dissent breakdown already fetched
+    above. There's no roster of sitting Justices anywhere in this app
+    (one would go stale on its own), so any seat not otherwise
+    identified is shown as a plain "joined in full" square rather than
+    guessing who occupies it.
   - The next upcoming oral argument day, with case names and docket
     numbers, parsed from the Court's monthly **Argument Calendar** PDFs.
   - The **question(s) presented** for every case in a term's Granted &
