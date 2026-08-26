@@ -384,22 +384,33 @@ const BENCH_SIZE = 9;
 function voteGraphic(o) {
   const author = o.author_name || o.justice;
   const votes = o.vote_breakdown || [];
+  // A concurrence -- even "in the judgment" -- is still a vote for the
+  // result, so it counts on the majority side of the split; only an
+  // actual dissent counts against it.
   const dissents = votes.filter((v) => v.has_dissent);
   const concurs = votes.filter((v) => v.has_concurrence && !v.has_dissent);
   if (!author && !dissents.length && !concurs.length) return "";
 
-  const seats = [];
-  if (author) seats.push({ kind: "author", label: `Wrote for the Court: ${author}` });
-  dissents.forEach((v) => seats.push({ kind: "dissent", label: `Dissent: ${v.author} (${v.label})` }));
-  concurs.forEach((v) => seats.push({ kind: "concur", label: `Concurrence: ${v.author} (${v.label})` }));
-  for (let i = seats.length; i < BENCH_SIZE; i++) {
-    seats.push({ kind: "joined", label: "Joined the majority in full" });
+  const majoritySeats = [];
+  if (author) majoritySeats.push({ kind: "author", label: `Wrote for the Court: ${author}` });
+  concurs.forEach((v) => majoritySeats.push({ kind: "concur", label: `Concurrence: ${v.author} (${v.label})` }));
+  for (let i = majoritySeats.length + dissents.length; i < BENCH_SIZE; i++) {
+    majoritySeats.push({ kind: "joined", label: "Joined the majority in full" });
   }
+  const dissentSeats = dissents.map((v) => ({ kind: "dissent", label: `Dissent: ${v.author} (${v.label})` }));
 
-  const pixels = seats
-    .map((s) => `<span class="vote-pixel vote-pixel-${s.kind}" title="${escapeHtml(s.label)}"></span>`)
-    .join("");
-  return `<div class="vote-graphic" aria-label="How the Justices voted">${pixels}</div>`;
+  const renderPixels = (seats) =>
+    seats
+      .map((s) => `<span class="vote-pixel vote-pixel-${s.kind}" title="${escapeHtml(s.label)}"></span>`)
+      .join("");
+
+  return `
+    <div class="vote-graphic" aria-label="Vote split: ${majoritySeats.length} to ${dissentSeats.length}">
+      <span class="vote-split">${majoritySeats.length}&ndash;${dissentSeats.length}</span>
+      <span class="vote-pixels">
+        <span class="vote-pixel-group">${renderPixels(majoritySeats)}</span>${dissentSeats.length ? `<span class="vote-pixel-group vote-pixel-group-dissent">${renderPixels(dissentSeats)}</span>` : ""}
+      </span>
+    </div>`;
 }
 
 function opinionCard(o, index) {
